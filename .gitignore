@@ -43,6 +43,9 @@ axum_capture.ps1
 *.sw?
 Thumbs.db
 
+# ---- Export artifacts ----
+*.zip
+
 # ---- Debug logs ----
 npm-debug.log*
 yarn-debug.log*
