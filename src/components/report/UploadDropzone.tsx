@@ -30,8 +30,8 @@ export function UploadDropzone({ onLoad }: { onLoad: (text: string, name: string
           <span className="italic text-accent">like they were printed.</span>
         </h1>
         <p className="mx-auto mt-5 max-w-md text-base leading-relaxed text-muted-foreground">
-          Drop in a markdown report and we'll set it in proper type — verdicts,
-          status pills, metric tables, and timelines, all rendered with care.
+          Drop in a markdown report and we'll set it in proper type — verdicts, status pills, metric
+          tables, and timelines, all rendered with care.
         </p>
       </div>
 
@@ -48,7 +48,9 @@ export function UploadDropzone({ onLoad }: { onLoad: (text: string, name: string
           if (f) handleFile(f);
         }}
         className={`group flex w-full cursor-pointer flex-col items-center gap-3 rounded-2xl border-2 border-dashed bg-surface px-8 py-14 text-center transition-all ${
-          drag ? "border-accent bg-accent/5" : "border-rule hover:border-accent/50 hover:bg-surface-2"
+          drag
+            ? "border-accent bg-accent/5"
+            : "border-rule hover:border-accent/50 hover:bg-surface-2"
         }`}
       >
         <input

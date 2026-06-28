@@ -19,7 +19,11 @@ function textOf(node: ReactNode): string {
   return "";
 }
 
-function HeadingWithStatus({ level, children, ...rest }: { level: 2 | 3 | 4; children: ReactNode } & Record<string, unknown>) {
+function HeadingWithStatus({
+  level,
+  children,
+  ...rest
+}: { level: 2 | 3 | 4; children: ReactNode } & Record<string, unknown>) {
   const Tag = `h${level}` as "h2" | "h3" | "h4";
   const raw = textOf(children);
   const m = raw.match(/^(.*?)\s*[—–-]\s*(PASS|FAIL|WARN)\s*$/i);
@@ -39,19 +43,32 @@ function HeadingWithStatus({ level, children, ...rest }: { level: 2 | 3 | 4; chi
 }
 
 const components: Components = {
-  h2: ({ children, ...rest }) => <HeadingWithStatus level={2} {...rest}>{children}</HeadingWithStatus>,
-  h3: ({ children, ...rest }) => <HeadingWithStatus level={3} {...rest}>{children}</HeadingWithStatus>,
-  h4: ({ children, ...rest }) => <HeadingWithStatus level={4} {...rest}>{children}</HeadingWithStatus>,
+  h2: ({ children, ...rest }) => (
+    <HeadingWithStatus level={2} {...rest}>
+      {children}
+    </HeadingWithStatus>
+  ),
+  h3: ({ children, ...rest }) => (
+    <HeadingWithStatus level={3} {...rest}>
+      {children}
+    </HeadingWithStatus>
+  ),
+  h4: ({ children, ...rest }) => (
+    <HeadingWithStatus level={4} {...rest}>
+      {children}
+    </HeadingWithStatus>
+  ),
   blockquote: ({ children }) => {
     // detect "**Label:** ..." in first paragraph
     const text = textOf(children).trim();
-    const m = text.match(/^([A-Z][\w \/]+):\s*([\s\S]+)$/);
+    const m = text.match(/^([A-Z][\w /]+):\s*([\s\S]+)$/);
     const lower = text.toLowerCase();
-    const kind = lower.includes("warn") || lower.includes("caution")
-      ? "warning"
-      : lower.includes("tip")
-      ? "tip"
-      : "note";
+    const kind =
+      lower.includes("warn") || lower.includes("caution")
+        ? "warning"
+        : lower.includes("tip")
+          ? "tip"
+          : "note";
     if (m) {
       return (
         <Callout kind={kind} title={m[1]}>
@@ -64,7 +81,7 @@ const components: Components = {
   td: ({ children, ...rest }) => {
     const text = textOf(children).trim();
     const status = detectStatus(text);
-    if (status && /^[✅❌⚠️⚠]\s*(PASS|FAIL|WARN)/i.test(text)) {
+    if (status && /^[✅❌⚠]️?\s*(PASS|FAIL|WARN)/iu.test(text)) {
       return (
         <td {...rest}>
           <StatusPill status={status} />
@@ -76,7 +93,9 @@ const components: Components = {
   pre: ({ children }) => {
     // children is a <code>...</code>
     const codeEl = Children.toArray(children).find(
-      (c) => isValidElement(c) && (c.type as { name?: string }).name !== undefined || (isValidElement(c) && c.props),
+      (c) =>
+        (isValidElement(c) && (c.type as { name?: string }).name !== undefined) ||
+        (isValidElement(c) && c.props),
     );
     if (!isValidElement(codeEl)) return <pre>{children}</pre>;
     const codeProps = codeEl.props as { className?: string; children?: ReactNode };

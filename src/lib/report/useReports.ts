@@ -24,11 +24,36 @@ export function useReports(): ReportsState {
     };
   }, []);
 
-  // Fetch reports written by process_log.py from /reports/index.json on mount.
+  // Fetch reports written by process_log.py from /reports/index.json. Refetch
+  // on a timer and when the tab regains focus, so a browser left open
+  // overnight picks up the nightly report without a manual refresh.
   useEffect(() => {
-    fetchServerReports()
-      .then(setServerReports)
-      .finally(() => setLoading(false));
+    let active = true;
+    const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+
+    const load = () =>
+      fetchServerReports()
+        .then((r) => {
+          if (active) setServerReports(r);
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+
+    load();
+    const timer = setInterval(load, REFRESH_MS);
+    const onFocus = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   // Server reports take precedence; show local-only uploads that aren't on the server.

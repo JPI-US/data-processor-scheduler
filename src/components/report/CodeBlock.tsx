@@ -32,7 +32,12 @@ export function CodeBlock({
             collapsible ? "cursor-pointer hover:text-foreground" : "cursor-default"
           }`}
         >
-          {collapsible && (open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />)}
+          {collapsible &&
+            (open ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            ))}
           {title ?? language ?? "code"}
         </button>
         <button

@@ -73,10 +73,16 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Data Viewer" },
-      { name: "description", content: "View and read your data reports." },
-      { property: "og:title", content: "Data Viewer" },
-      { property: "og:description", content: "View and read your data reports." },
+      { title: "Axum Tower — Nightly Reports" },
+      {
+        name: "description",
+        content: "Nightly log analysis reports for the Axum solar-tracking tower.",
+      },
+      { property: "og:title", content: "Axum Tower — Nightly Reports" },
+      {
+        property: "og:description",
+        content: "Nightly log analysis reports for the Axum solar-tracking tower.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],

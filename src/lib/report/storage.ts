@@ -90,15 +90,10 @@ export async function fetchServerReports(): Promise<SavedReport[]> {
 
 // ---------- private helpers ----------
 
-function buildSavedReport(
-  source: string,
-  fileName: string,
-  fromServer = false,
-): SavedReport {
+function buildSavedReport(source: string, fileName: string, fromServer = false): SavedReport {
   const parsed = parseReport(source);
   const date =
-    extractDate(parsed.metaLines) ??
-    (fileName.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? today());
+    extractDate(parsed.metaLines) ?? fileName.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? today();
   return {
     id: date,
     date,

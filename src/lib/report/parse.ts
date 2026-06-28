@@ -9,7 +9,7 @@ export function detectStatus(text: string): Status {
 }
 
 export function stripStatusGlyphs(text: string): string {
-  return text.replace(/[✅❌⚠️⚠]/g, "").trim();
+  return text.replace(/[✅❌⚠]️?/gu, "").trim();
 }
 
 export interface ReportMeta {

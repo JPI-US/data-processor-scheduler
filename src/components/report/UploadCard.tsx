@@ -34,7 +34,9 @@ export function UploadCard({ onLoad }: { onLoad: (text: string, name: string) =>
           if (f) handleFile(f);
         }}
         className={`flex w-full cursor-pointer items-center gap-4 rounded-xl border-2 border-dashed bg-surface px-5 py-4 transition-all ${
-          drag ? "border-accent bg-accent/5" : "border-rule hover:border-accent/50 hover:bg-surface-2"
+          drag
+            ? "border-accent bg-accent/5"
+            : "border-rule hover:border-accent/50 hover:bg-surface-2"
         }`}
       >
         <input
@@ -52,17 +54,13 @@ export function UploadCard({ onLoad }: { onLoad: (text: string, name: string) =>
           <Upload className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-foreground">
-            Add today's report
-          </div>
+          <div className="text-sm font-medium text-foreground">Add today's report</div>
           <div className="text-xs text-muted-foreground">
             Drop a .md file, or click to browse. One row per report date — re-uploading overwrites.
           </div>
         </div>
       </label>
-      {error && (
-        <div className="mt-2 text-xs text-[var(--color-fail)]">{error}</div>
-      )}
+      {error && <div className="mt-2 text-xs text-[var(--color-fail)]">{error}</div>}
     </div>
   );
 }

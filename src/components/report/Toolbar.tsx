@@ -6,7 +6,8 @@ export function Toolbar({ onReset }: { onReset: () => void }) {
 
   useEffect(() => {
     const stored = localStorage.getItem("report-theme");
-    const isDark = stored === "dark" || (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    const isDark =
+      stored === "dark" || (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches);
     setDark(isDark);
     document.documentElement.classList.toggle("dark", isDark);
   }, []);
