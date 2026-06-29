@@ -71,7 +71,10 @@ STALL_GROW_MAX  = 3     # flag if Step Remaining grew more than this many times
 
 # ------------------------------------------------------------------ regex ----
 ANSI   = re.compile(r"\x1b\[[0-9;]*m")
-HOSTTS = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\.\d+\]")
+# Host timestamp prefix, tolerant of both capture formats:
+#   run_capture.py     -> "[2026-06-28 17:20:48.332] body"   (bracketed)
+#   capture_and_run.ps1 -> "2026-06-28 17:20:48.332 body"    (unbracketed)
+HOSTTS = re.compile(r"^\[?(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\.\d+\]?\s?")
 TICK   = re.compile(r"Encoder Ticks:\s*(-?\d+),\s*Step Position:\s*(-?\d+),\s*Step Remaining:\s*(-?\d+)")
 UPTIME = re.compile(r"^([IWEDV]) \(\d+\)")     # normalize the (uptime_ms) counter for dedup
 ON     = "Relay ON - Starting motor movement"
@@ -84,12 +87,14 @@ def decode(path):
     for l in raw:
         m = HOSTTS.match(l)
         ts = m.group(1) if m else None
-        body = ANSI.sub("", re.sub(r"^\[[^\]]*\]\s?", "", l))
+        rest = l[m.end():] if m else l
+        body = ANSI.sub("", rest)
         rows.append((ts, body))
     return rows
 
 
-def summarize_movements(rows):
+def _build_moves(rows):
+    """Pair each Relay ON..OFF cycle into a move with its tick telemetry."""
     moves, cur = [], None
     for ts, b in rows:
         if ON in b:
@@ -101,40 +106,59 @@ def summarize_movements(rows):
         if mo and cur is not None:
             cur["outcome"] = mo.group(1)
             moves.append(cur); cur = None
+    return moves
 
+
+def _baseline_ratio(moves):
     ratios = []
     for mv in moves:
         t = mv["ticks"]
         if len(t) >= 2 and (t[-1][1] - t[0][1]):
             ratios.append((t[-1][0]-t[0][0]) / (t[-1][1]-t[0][1]))
-    base = statistics.median(ratios) if ratios else 0.0
+    return statistics.median(ratios) if ratios else 0.0
 
+
+def _move_flags(mv, base):
+    """Return the list of anomaly flags for one move (empty == nominal)."""
+    t, oc = mv["ticks"], mv["outcome"]
+    if len(t) < 2:
+        return [f"OUTCOME={oc}(no telemetry)"]
+    sp = t[-1][1] - t[0][1]
+    en = t[-1][0] - t[0][0]
+    ratio = en/sp if sp else 0.0
+    srs = [abs(x[2]) for x in t]
+    grew = sum(1 for a, b in zip(srs, srs[1:]) if b > a)
+    reached = srs[-1] < 0.02 * max(srs) if srs else False
+    flags = []
+    if oc != "Completed":
+        flags.append(f"OUTCOME={oc}")
+    if base and abs(ratio - base) > RATIO_DEVIATION * abs(base):
+        flags.append(f"RATIO_DEVIATION(this={ratio:.4f} vs base={base:.4f})")
+    if grew > STALL_GROW_MAX:
+        flags.append(f"REMAINING_GREW_{grew}x(possible stall)")
+    if oc == "Completed" and not reached:
+        flags.append("DIDNT_REACH_TARGET")
+    return flags
+
+
+def summarize_movements(rows):
+    moves = _build_moves(rows)
+    base = _baseline_ratio(moves)
     out = [f"MOVEMENT SUMMARY - {len(moves)} movements; "
            f"baseline encoder/step ratio = {base:.4f}"]
     flagged = 0
     for i, mv in enumerate(moves):
-        t, oc = mv["ticks"], mv["outcome"]
-        if len(t) < 2:
-            out.append(f"  move {i}: outcome={oc} (no telemetry)")
-            flagged += 1
+        flags = _move_flags(mv, base)
+        if not flags:
             continue
-        sp = t[-1][1] - t[0][1]
-        en = t[-1][0] - t[0][0]
-        ratio = en/sp if sp else 0.0
-        srs = [abs(x[2]) for x in t]
-        grew = sum(1 for a, b in zip(srs, srs[1:]) if b > a)
-        reached = srs[-1] < 0.02 * max(srs) if srs else False
-        flags = []
-        if oc != "Completed":
-            flags.append(f"OUTCOME={oc}")
-        if base and abs(ratio - base) > RATIO_DEVIATION * abs(base):
-            flags.append(f"RATIO_DEVIATION(this={ratio:.4f} vs base={base:.4f})")
-        if grew > STALL_GROW_MAX:
-            flags.append(f"REMAINING_GREW_{grew}x(possible stall)")
-        if oc == "Completed" and not reached:
-            flags.append("DIDNT_REACH_TARGET")
-        if flags:
-            flagged += 1
+        flagged += 1
+        t = mv["ticks"]
+        if len(t) < 2:
+            out.append(f"  move {i}: {mv['start_ts']}  >> {', '.join(flags)}")
+        else:
+            sp = t[-1][1] - t[0][1]
+            en = t[-1][0] - t[0][0]
+            ratio = en/sp if sp else 0.0
             out.append(f"  move {i}: {mv['start_ts']} stepsD{sp} encD{en} "
                        f"ratio={ratio:.4f} samples={len(t)}  >> {', '.join(flags)}")
     out.append(f"  ({len(moves)-flagged} movements nominal and omitted; "
@@ -170,6 +194,173 @@ def collapse_events(rows):
     return "\n".join(out)
 
 
+# ----------------------------------------------------------- metrics block ---
+# Phase 0 contract: process_log.py computes the hard numbers deterministically
+# from the log; the UI trends THESE, never the model's prose. Emitted as an
+# HTML comment at the top of each report (invisible when rendered as markdown).
+METRICS_SCHEMA = 1
+TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+FW_RE   = re.compile(r"App version:\s*(\S+)")
+MODE_RE = re.compile(r'Motion mode:\s*"([^"]+)"')
+
+
+def _parse_ts(ts):
+    try:
+        return datetime.datetime.strptime(ts, TS_FMT) if ts else None
+    except ValueError:
+        return None
+
+
+def _crash_kind(reason):
+    if "ESP_ERR_TIMEOUT" in reason:
+        return "ESP_ERR_TIMEOUT"
+    reason = reason.strip()
+    return reason[:48] if reason else "panic"
+
+
+def compute_metrics(rows, log_path):
+    """Deterministic per-session metrics, counted from the decoded log."""
+    dts = [d for d in (_parse_ts(ts) for ts, _ in rows if ts) if d]
+    session_min = round((dts[-1] - dts[0]).total_seconds() / 60) if len(dts) >= 2 else 0
+    last_dt = dts[-1] if dts else None
+
+    boots = dns = publishes = wifi_reconnect_fail = 0
+    crashes = 0
+    crash_kinds = []
+    firmware = encoder_mode = None
+    nvs_ok = True
+    expect_reason = False
+
+    mqtt_state, mqtt_connect_dt, mqtt_connected_s = "down", None, 0.0
+    mqtt_connects = mqtt_disconnects = 0
+
+    sleep_phase = False
+    startup_attempt = sleep_attempt = False
+    homing_startup_ok = homing_sleep_ok = None
+
+    for ts, b in rows:
+        dt = _parse_ts(ts)
+
+        if firmware is None:
+            mfw = FW_RE.search(b)
+            if mfw:
+                firmware = mfw.group(1)
+        mmode = MODE_RE.search(b)
+        if mmode:
+            encoder_mode = mmode.group(1)
+        if "switching to StepperOnly" in b:
+            encoder_mode = "StepperOnly"
+
+        if "Calling app_main()" in b:
+            boots += 1
+
+        # crashes: a panic's reason is on the following non-empty line
+        if expect_reason and b.strip():
+            kind = _crash_kind(b)
+            if kind not in crash_kinds and len(crash_kinds) < 5:
+                crash_kinds.append(kind)
+            expect_reason = False
+        if "panicked at" in b:
+            crashes += 1
+            expect_reason = True
+        elif "Guru Meditation" in b:
+            crashes += 1
+            if "Guru Meditation" not in crash_kinds and len(crash_kinds) < 5:
+                crash_kinds.append("Guru Meditation")
+        elif "Task watchdog got triggered" in b:
+            crashes += 1
+            if "task watchdog" not in crash_kinds and len(crash_kinds) < 5:
+                crash_kinds.append("task watchdog")
+
+        if "Wi-Fi reconnect: connect() failed" in b:
+            wifi_reconnect_fail += 1
+
+        # connectivity
+        if "getaddrinfo() returns" in b:
+            dns += 1
+        if "published successfully" in b:
+            publishes += 1
+        if "MQTT Connected" in b:
+            if mqtt_state == "down":
+                mqtt_connects += 1
+                mqtt_state, mqtt_connect_dt = "up", dt
+        elif "MQTT Disconnected" in b:
+            if mqtt_state == "up":
+                mqtt_disconnects += 1
+                if mqtt_connect_dt and dt:
+                    mqtt_connected_s += (dt - mqtt_connect_dt).total_seconds()
+                mqtt_state, mqtt_connect_dt = "down", None
+
+        # persistence
+        if re.search(r"nvs.*(error|fail|invalid|disabled)", b, re.I) and "enabled" not in b:
+            nvs_ok = False
+
+        # homing — split into startup vs sleep phase
+        if "Moving to sleep position" in b:
+            sleep_phase = True
+        attempt = "Looking for the limit switch" in b
+        success = ("Homing OK" in b) or ("found home" in b)
+        if not sleep_phase:
+            startup_attempt = startup_attempt or attempt
+            if success:
+                homing_startup_ok = True
+        else:
+            sleep_attempt = sleep_attempt or attempt
+            if success:
+                homing_sleep_ok = True
+
+    if mqtt_state == "up" and mqtt_connect_dt and last_dt:
+        mqtt_connected_s += (last_dt - mqtt_connect_dt).total_seconds()
+    if startup_attempt and homing_startup_ok is None:
+        homing_startup_ok = False
+    if sleep_attempt and homing_sleep_ok is None:
+        homing_sleep_ok = False
+
+    moves = _build_moves(rows)
+    base = _baseline_ratio(moves)
+    started = sum(1 for _, b in rows if ON in b)
+    completed = sum(1 for mv in moves if mv["outcome"] == "Completed")
+    flagged = sum(1 for mv in moves if _move_flags(mv, base))
+
+    hours = session_min / 60 if session_min else 0
+
+    # null guards (the locked contract): only emit a rate when it's meaningful.
+    motion_pct = round(100 * completed / started, 1) if started >= 5 else None
+    uptime_pct = (round(100 * mqtt_connected_s / (session_min * 60), 1)
+                  if session_min >= 30 and mqtt_connects >= 1 else None)
+    dns_per_hr = round(dns / hours, 1) if session_min >= 15 and hours else None
+
+    return {
+        "schema": METRICS_SCHEMA,
+        "session_date": report_date_from_log(log_path),
+        "firmware": firmware,
+        "session_minutes": session_min,
+        "boots": boots,
+        "crashes": crashes,
+        "crash_kinds": crash_kinds,
+        "wifi_reconnect_failures": wifi_reconnect_fail,
+        "movements_started": started,
+        "movements_completed": completed,
+        "motion_completion_pct": motion_pct,
+        "flagged_movements": flagged,
+        "mqtt_connects": mqtt_connects,
+        "mqtt_disconnects": mqtt_disconnects,
+        "mqtt_uptime_pct": uptime_pct,
+        "dns_failures": dns,
+        "dns_failures_per_hour": dns_per_hr,
+        "mqtt_publishes_confirmed": publishes,
+        "encoder_mode": encoder_mode,
+        "nvs_ok": nvs_ok,
+        "homing_startup_ok": homing_startup_ok,
+        "homing_sleep_ok": homing_sleep_ok,
+    }
+
+
+def metrics_block(metrics):
+    return f"<!--axum-metrics\n{json.dumps(metrics, indent=2)}\n-->"
+
+
 def build_digest(path):
     rows = decode(path)
     digest = (summarize_movements(rows)
@@ -187,13 +378,18 @@ def load_prompt_with_trend():
     return prompt
 
 
-def call_claude(prompt, digest):
+def call_claude(prompt, digest, metrics):
     if not API_KEY:
         sys.exit("ANTHROPIC_API_KEY is not set.")
+    ground_truth = (
+        "### GROUND-TRUTH METRICS (authoritative, computed from the log — use these "
+        "exact numbers; do not recompute, contradict, or reproduce as a table)\n\n"
+        f"{json.dumps(metrics, indent=2)}"
+    )
+    content = f"{prompt}\n\n{ground_truth}\n\n### TODAY'S LOG (digest)\n\n{digest}"
     body = {
         "model": MODEL, "max_tokens": MAX_TOKENS,
-        "messages": [{"role": "user",
-                      "content": f"{prompt}\n\n### TODAY'S LOG (digest)\n\n{digest}"}],
+        "messages": [{"role": "user", "content": content}],
     }
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
@@ -258,14 +454,19 @@ def main():
 
     print("Processing", log_path)
     rows, digest = build_digest(log_path)
+    metrics = compute_metrics(rows, log_path)
     print(f"  {len(rows):,} raw lines -> digest ~{len(digest)//4:,} tokens "
           f"({digest.count(chr(10)):,} lines)")
 
     if "--digest-only" in sys.argv:
+        print("\n" + metrics_block(metrics))
         print("\n" + digest)
         return
 
-    report = call_claude(load_prompt_with_trend(), digest)
+    report = call_claude(load_prompt_with_trend(), digest, metrics)
+    # Phase 0: prepend the deterministic metrics block so the UI trends exact
+    # numbers, not the model's prose. parse.ts strips it before rendering.
+    report = metrics_block(metrics) + "\n\n" + report.lstrip()
     deliver(report, log_path)
 
 

@@ -79,7 +79,7 @@ Write-Host "  Logging to: $newLog" -ForegroundColor DarkGray
 Write-Host '============================================================' -ForegroundColor Yellow
 Write-Host ''
 espflash monitor --port $Port |
-  ForEach-Object { "`$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss.fff')) `$_" } |
+  ForEach-Object { "[`$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss.fff'))] `$_" } |
   Tee-Object -FilePath "$newLog"
 "@ | Set-Content -Path $innerScript -Encoding UTF8
 

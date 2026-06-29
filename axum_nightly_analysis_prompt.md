@@ -33,11 +33,20 @@ rest of the day, retrying at midnight. This is degraded-but-handled, NOT a crash
 process — the tower stops tracking silently. Flag any occurrence as a high-priority
 crash even though no panic backtrace appears.
 
+## Ground-truth metrics
+
+A **GROUND-TRUTH METRICS** block (exact counts computed deterministically by
+`process_log.py`: boots, crashes, movements, MQTT events, uptime %, DNS failures,
+homing, etc.) is provided with the digest, and is also prepended to the final
+report automatically. **Those numbers are authoritative.** Use them as-is in your
+narrative; do not recompute, estimate, or contradict them, and **do not reproduce
+them as a metrics table** — your job is interpretation, not transcription.
+
 ## What to extract and assess
 
 For every finding, cite the evidence (relevant log message, approximate time, count).
-Use exact counts where asked; do not estimate vaguely. When events appear inside a
-collapsed `[block xN]`, multiply by N to get the true count.
+Use the ground-truth counts; when narrating events inside a collapsed `[block xN]`,
+that pattern repeated N times.
 
 1. **Stability & boots.** Search for: `panic`, `Guru Meditation`, `Backtrace`,
    watchdog/`WDT`, `StoreProhibited`/`LoadProhibited`, `abort`, unexpected reset
@@ -72,8 +81,8 @@ collapsed `[block xN]`, multiply by N to get the true count.
      any `[block xN]` containing them. This is the dominant connectivity failure mode.
    - **Successful publishes** (`MQTT Publish Message {id} confirmed`) — total count.
    - **Wi-Fi reconnect failures** — `ESP_ERR_TIMEOUT` on `connect()`.
-   - **MQTT uptime %** — estimate as: sum of (Disconnected_ts − Connected_ts) for each
-     connected interval, divided by total session duration. State the intervals you used.
+   - **MQTT uptime %** — provided in the ground-truth metrics; interpret it (e.g. when
+     and why the connection dropped), don't recompute it.
    - If MQTT was never connected even once, state that explicitly.
 
 6. **Persistence.** Confirm NVS writes succeed (`Stored stable heading in NVS`,
@@ -134,9 +143,11 @@ One-sentence reason.
 
 ---
 
-## Headline Metrics
-| Metric | Value |
-...
+## Session at a Glance
+
+A short narrative (3–6 sentences) of how the night went: the arc of events with
+key timestamps — boot, homing, the headline failure (if any) and when it struck,
+how connectivity behaved, how it ended. No numeric table; interpret, don't list.
 
 ## Findings by Subsystem
 ### 1. Stability & Boots
@@ -157,6 +168,8 @@ Rules:
   same line: `## VERDICT: FAIL`, not `## VERDICT:` followed by bold text.
 - The meta line uses `·` (middle dot) as the separator between fields.
 - **Session date** must appear in the meta line so the UI can index the report by date.
+- **Do not emit a numeric metrics table.** The exact counts live in the machine
+  metrics block; reproducing them as prose only creates a second copy that can drift.
 - Omit subsections that are entirely nominal with one "nominal" line — don't pad.
 - Cite timestamps and counts for every finding. Do not invent lines or counts not found.
 - If the log is truncated or a subsystem has no data, say so explicitly.

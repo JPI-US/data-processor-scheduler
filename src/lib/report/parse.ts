@@ -25,8 +25,22 @@ export function parseReport(markdown: string): ReportMeta {
   let title = "Untitled Report";
   const metaLines: { key: string; value: string }[] = [];
 
-  // skip blank lines
-  while (i < lines.length && lines[i].trim() === "") i++;
+  // Skip leading blank lines AND HTML comment blocks. process_log.py emits a
+  // <!--axum-metrics ... --> block above the title; without this, the first
+  // non-blank line would be the comment and title/meta/verdict detection would
+  // silently fail on every generated report.
+  while (i < lines.length) {
+    if (lines[i].trim() === "") {
+      i++;
+      continue;
+    }
+    if (lines[i].trimStart().startsWith("<!--")) {
+      while (i < lines.length && !lines[i].includes("-->")) i++;
+      if (i < lines.length) i++; // consume the closing --> line
+      continue;
+    }
+    break;
+  }
 
   // title (first h1)
   if (i < lines.length && lines[i].startsWith("# ")) {
