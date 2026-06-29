@@ -12,7 +12,7 @@ export function useReports(): ReportsState {
   const [serverReports, setServerReports] = useState<SavedReport[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Keep localStorage reports in sync.
+  // Keep localStorage uploads in sync.
   useEffect(() => {
     const sync = () => setLocalReports(getReports());
     sync();
@@ -24,12 +24,12 @@ export function useReports(): ReportsState {
     };
   }, []);
 
-  // Fetch reports written by process_log.py from /reports/index.json. Refetch
-  // on a timer and when the tab regains focus, so a browser left open
-  // overnight picks up the nightly report without a manual refresh.
+  // Fetch pipeline reports from /reports/index.json. Refetch on a timer and on
+  // tab focus, so a browser left open overnight picks up the nightly report
+  // without a manual refresh.
   useEffect(() => {
     let active = true;
-    const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+    const REFRESH_MS = 5 * 60 * 1000;
 
     const load = () =>
       fetchServerReports()
@@ -56,7 +56,7 @@ export function useReports(): ReportsState {
     };
   }, []);
 
-  // Server reports take precedence; show local-only uploads that aren't on the server.
+  // Server reports win; show local-only uploads that aren't on the server.
   const reports = useMemo(() => {
     const serverIds = new Set(serverReports.map((r) => r.id));
     const localOnly = localReports.filter((r) => !serverIds.has(r.id));

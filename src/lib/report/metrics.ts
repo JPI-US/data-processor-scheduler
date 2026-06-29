@@ -1,139 +1,180 @@
-// metrics.ts — read the deterministic <!--axum-metrics--> block that
-// process_log.py emits at the top of each report.
-//
-// Contract (Phase 0): Python counts the hard numbers from the log; the UI
-// trends THESE, never the model's prose. This reader extracts the block,
-// parses it defensively (never throws), and returns typed metrics — or null
-// for older reports that predate the block, so the list still renders.
+// Deterministic metrics contract emitted by process_log.py at the top of each
+// report as a <!--axum-metrics ... --> JSON block. The reader is forward-
+// compatible: unknown fields are ignored, missing fields become null, parse
+// errors return null. Older reports without the block simply have no metrics.
+
+export const METRICS_SCHEMA = 1;
 
 export interface AxumMetrics {
   schema: number;
-  session_date: string;
+  session_date: string | null;
   firmware: string | null;
-  session_minutes: number;
-  boots: number;
-  crashes: number;
+  session_minutes: number | null;
+  boots: number | null;
+  crashes: number | null;
   crash_kinds: string[];
   /** Wi-Fi reconnect ESP_ERR_TIMEOUTs — the firmware's #1 bug. Tracked for
    *  history even though it isn't a default card yet. */
-  wifi_reconnect_failures: number;
-  movements_started: number;
-  movements_completed: number;
-  /** null when movements_started < 5 (too few to be meaningful). */
+  wifi_reconnect_failures: number | null;
+  movements_started: number | null;
+  movements_completed: number | null;
   motion_completion_pct: number | null;
-  flagged_movements: number;
-  mqtt_connects: number;
-  mqtt_disconnects: number;
-  /** null when session_minutes < 30 or no MQTT connect happened. */
+  flagged_movements: number | null;
+  mqtt_connects: number | null;
+  mqtt_disconnects: number | null;
   mqtt_uptime_pct: number | null;
-  dns_failures: number;
-  /** null when session_minutes < 15 (rate not meaningful on a short session). */
+  dns_failures: number | null;
   dns_failures_per_hour: number | null;
-  mqtt_publishes_confirmed: number;
+  mqtt_publishes_confirmed: number | null;
   encoder_mode: string | null;
-  nvs_ok: boolean;
-  /** true = homed OK, false = attempted but not confirmed, null = not attempted. */
+  nvs_ok: boolean | null;
   homing_startup_ok: boolean | null;
   homing_sleep_ok: boolean | null;
 }
 
-/** Highest metrics-block schema this reader understands. */
-const KNOWN_SCHEMA = 1;
-let warnedSchema = false;
+const NUM_KEYS: (keyof AxumMetrics)[] = [
+  "session_minutes",
+  "boots",
+  "crashes",
+  "wifi_reconnect_failures",
+  "movements_started",
+  "movements_completed",
+  "motion_completion_pct",
+  "flagged_movements",
+  "mqtt_connects",
+  "mqtt_disconnects",
+  "mqtt_uptime_pct",
+  "dns_failures",
+  "dns_failures_per_hour",
+  "mqtt_publishes_confirmed",
+];
 
-const BLOCK_RE = /<!--axum-metrics\s*([\s\S]*?)-->/;
+const STR_KEYS: (keyof AxumMetrics)[] = ["session_date", "firmware", "encoder_mode"];
+const BOOL_KEYS: (keyof AxumMetrics)[] = ["nvs_ok", "homing_startup_ok", "homing_sleep_ok"];
 
-/**
- * Extract and parse the metrics block from a raw report's markdown.
- * Returns null if the block is absent or unparseable — callers should treat
- * that as "no metrics for this night" and render the report without a data point.
- */
-export function extractMetrics(source: string): AxumMetrics | null {
-  const m = source.match(BLOCK_RE);
+let warnedNewerSchema = false;
+
+export function extractMetrics(markdown: string): AxumMetrics | null {
+  // Match the first HTML comment that starts with `axum-metrics`.
+  const m = markdown.match(/<!--\s*axum-metrics\s*([\s\S]*?)-->/);
   if (!m) return null;
-
   let raw: unknown;
   try {
-    raw = JSON.parse(m[1].trim());
+    raw = JSON.parse(m[1]);
   } catch {
     return null;
   }
-  if (typeof raw !== "object" || raw === null) return null;
+  if (!raw || typeof raw !== "object") return null;
+  const src = raw as Record<string, unknown>;
 
-  const o = raw as Record<string, unknown>;
+  const out: AxumMetrics = {
+    schema: typeof src.schema === "number" ? src.schema : 1,
+    session_date: null,
+    firmware: null,
+    session_minutes: null,
+    boots: null,
+    crashes: null,
+    crash_kinds: [],
+    wifi_reconnect_failures: null,
+    movements_started: null,
+    movements_completed: null,
+    motion_completion_pct: null,
+    flagged_movements: null,
+    mqtt_connects: null,
+    mqtt_disconnects: null,
+    mqtt_uptime_pct: null,
+    dns_failures: null,
+    dns_failures_per_hour: null,
+    mqtt_publishes_confirmed: null,
+    encoder_mode: null,
+    nvs_ok: null,
+    homing_startup_ok: null,
+    homing_sleep_ok: null,
+  };
 
-  // Forward-compat: parse known fields, ignore unknown, never throw. A newer
-  // schema is logged once, not surfaced to the user.
-  const schema = num(o.schema, 0);
-  if (schema > KNOWN_SCHEMA && !warnedSchema) {
-    warnedSchema = true;
-    console.warn(
-      `axum-metrics schema ${schema} is newer than supported (${KNOWN_SCHEMA}); reading known fields only.`,
-    );
+  const sink = out as unknown as Record<string, unknown>;
+  for (const k of NUM_KEYS) {
+    const v = src[k as string];
+    if (typeof v === "number" && Number.isFinite(v)) sink[k as string] = v;
+  }
+  for (const k of STR_KEYS) {
+    const v = src[k as string];
+    if (typeof v === "string" && v.length > 0) sink[k as string] = v;
+  }
+  for (const k of BOOL_KEYS) {
+    const v = src[k as string];
+    if (typeof v === "boolean") sink[k as string] = v;
   }
 
-  return {
-    schema,
-    session_date: str(o.session_date) ?? "",
-    firmware: str(o.firmware),
-    session_minutes: num(o.session_minutes, 0),
-    boots: num(o.boots, 0),
-    crashes: num(o.crashes, 0),
-    crash_kinds: strArray(o.crash_kinds),
-    wifi_reconnect_failures: num(o.wifi_reconnect_failures, 0),
-    movements_started: num(o.movements_started, 0),
-    movements_completed: num(o.movements_completed, 0),
-    motion_completion_pct: numOrNull(o.motion_completion_pct),
-    flagged_movements: num(o.flagged_movements, 0),
-    mqtt_connects: num(o.mqtt_connects, 0),
-    mqtt_disconnects: num(o.mqtt_disconnects, 0),
-    mqtt_uptime_pct: numOrNull(o.mqtt_uptime_pct),
-    dns_failures: num(o.dns_failures, 0),
-    dns_failures_per_hour: numOrNull(o.dns_failures_per_hour),
-    mqtt_publishes_confirmed: num(o.mqtt_publishes_confirmed, 0),
-    encoder_mode: str(o.encoder_mode),
-    nvs_ok: o.nvs_ok !== false, // default true unless explicitly false
-    homing_startup_ok: boolOrNull(o.homing_startup_ok),
-    homing_sleep_ok: boolOrNull(o.homing_sleep_ok),
-  };
+  if (Array.isArray(src.crash_kinds)) {
+    out.crash_kinds = src.crash_kinds.filter((x): x is string => typeof x === "string").slice(0, 5);
+  }
+
+  if (out.schema > METRICS_SCHEMA && !warnedNewerSchema) {
+    warnedNewerSchema = true;
+
+    console.warn(`axum-metrics schema ${out.schema} newer than reader (${METRICS_SCHEMA})`);
+  }
+  return out;
 }
 
-// ---------- card contract (consumed by the overview / trends) ----------
+// ---------------------------------------------------------------------------
+// Headline metric cards (sparkline overview). Locked to four continuous
+// metrics that behave well under σ + domain floor. Homing is a discrete
+// status and is rendered separately in the masthead — do not add here.
+// ---------------------------------------------------------------------------
 
-export interface MetricCardConfig {
+export type CardDirection = "higher-better" | "lower-better";
+
+export interface CardSpec {
   key: keyof AxumMetrics;
   label: string;
-  unit: "pct" | "count" | "rate";
-  /** Which direction is a regression, for badge color + threshold sign. */
-  worseDirection: "up" | "down";
+  /** Domain floor for regression flag. Units depend on direction. */
+  floor: number;
+  /** Multiplier comparison for ratios (e.g. DNS rate × baseline). */
+  ratio?: number;
+  direction: CardDirection;
+  /** Formatter for the headline number on the card. */
+  format: (v: number) => string;
+  /** Suffix appended after the formatted number, e.g. "%" or " /hr". */
+  suffix?: string;
 }
 
-/**
- * The four headline cards on the overview. The 4th slot is intentionally
- * swappable — change this one line to trade DNS/hr for flagged movements,
- * wifi_reconnect_failures, etc., without touching components.
- */
-export const DEFAULT_CARDS: MetricCardConfig[] = [
-  { key: "mqtt_uptime_pct", label: "MQTT uptime", unit: "pct", worseDirection: "down" },
-  { key: "motion_completion_pct", label: "Motion completion", unit: "pct", worseDirection: "down" },
-  { key: "dns_failures_per_hour", label: "DNS / hr", unit: "rate", worseDirection: "up" },
-  { key: "crashes", label: "Crashes", unit: "count", worseDirection: "up" },
+const pct = (v: number) => v.toFixed(v >= 99.95 ? 0 : 1);
+const intFmt = (v: number) => Math.round(v).toString();
+const oneDec = (v: number) => (v >= 100 ? Math.round(v).toString() : v.toFixed(1));
+
+export const DEFAULT_CARDS: CardSpec[] = [
+  {
+    key: "mqtt_uptime_pct",
+    label: "MQTT uptime",
+    floor: 1, // >1pp drop
+    direction: "higher-better",
+    format: pct,
+    suffix: "%",
+  },
+  {
+    key: "motion_completion_pct",
+    label: "Motion completion",
+    floor: 5, // >5pp drop
+    direction: "higher-better",
+    format: pct,
+    suffix: "%",
+  },
+  {
+    key: "dns_failures_per_hour",
+    label: "DNS failures",
+    floor: 10, // must be at least 10/hr before ratio matters
+    ratio: 2, // >2× baseline
+    direction: "lower-better",
+    format: oneDec,
+    suffix: " /hr",
+  },
+  {
+    key: "crashes",
+    label: "Crashes",
+    floor: 1, // any new crash above baseline
+    direction: "lower-better",
+    format: intFmt,
+  },
 ];
-
-// ---------- defensive coercion helpers ----------
-
-function num(v: unknown, fallback: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-function numOrNull(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-function str(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
-function strArray(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-}
-function boolOrNull(v: unknown): boolean | null {
-  return typeof v === "boolean" ? v : null;
-}

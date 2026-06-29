@@ -78,7 +78,9 @@ export function ReportSummaryDialog({
         </div>
 
         <DialogFooter className="flex-row items-center justify-between gap-2 border-t border-rule px-6 py-3 sm:justify-between">
-          {!report.fromServer ? (
+          {report.fromServer ? (
+            <span />
+          ) : (
             <button
               onClick={() => {
                 if (confirm("Delete this report?")) {
@@ -91,8 +93,6 @@ export function ReportSummaryDialog({
               <Trash2 className="h-3.5 w-3.5" />
               Delete
             </button>
-          ) : (
-            <span />
           )}
           <Link
             to="/report/$id"

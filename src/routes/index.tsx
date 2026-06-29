@@ -1,36 +1,33 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { UploadDropzone } from "@/components/report/UploadDropzone";
 import { UploadCard } from "@/components/report/UploadCard";
 import { ReportList } from "@/components/report/ReportList";
+import { Masthead } from "@/components/overview/Masthead";
+import { VerdictStrip } from "@/components/overview/VerdictStrip";
+import { MetricCard } from "@/components/overview/MetricCard";
 import { useReports } from "@/lib/report/useReports";
 import { saveReport } from "@/lib/report/storage";
-import { Clock, FileText } from "lucide-react";
+import { DEFAULT_CARDS } from "@/lib/report/metrics";
+import { numericSeries, regressionFor } from "@/lib/report/trends";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Axum Tower — Nightly Reports" },
+      { title: "Axum Nightly — Trend & Triage" },
       {
         name: "description",
-        content: "Nightly log analysis reports for the Axum solar-tracking tower.",
+        content:
+          "Glance at last night's verdict, scan 30 nights at a stroke, and drill into any report.",
+      },
+      { property: "og:title", content: "Axum Nightly" },
+      {
+        property: "og:description",
+        content: "Nightly verdicts, trends, and triage for the Axum tower.",
       },
     ],
   }),
   component: Index,
 });
-
-function Header({ subtitle }: { subtitle?: string }) {
-  return (
-    <header className="mb-10">
-      <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-rule bg-surface px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-        <FileText className="h-3.5 w-3.5" /> Report viewer
-      </div>
-      <h1 className="font-serif text-4xl font-medium tracking-tight text-foreground">
-        Axum nightly reports
-      </h1>
-      {subtitle && <p className="mt-2 text-muted-foreground">{subtitle}</p>}
-    </header>
-  );
-}
 
 function Index() {
   const { reports, loading } = useReports();
@@ -39,12 +36,18 @@ function Index() {
     saveReport(text, name);
   };
 
-  // While the server fetch is in flight, show a neutral loading state so we
-  // don't flash the empty state when reports are about to appear.
+  // While the server fetch is in flight, show a neutral skeleton so we don't
+  // flash the upload screen when pipeline reports are about to appear.
   if (loading) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-16">
-        <Header />
+      <div className="mx-auto max-w-4xl px-6 py-12">
+        <div className="mb-8 h-16 animate-pulse rounded-xl bg-surface" />
+        <div className="mb-10 h-9 animate-pulse rounded-lg bg-surface" />
+        <div className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((n) => (
+            <div key={n} className="h-28 animate-pulse rounded-lg bg-surface" />
+          ))}
+        </div>
         <div className="space-y-2">
           {[1, 2, 3].map((n) => (
             <div key={n} className="h-16 animate-pulse rounded-xl bg-surface" />
@@ -54,37 +57,38 @@ function Index() {
     );
   }
 
-  // No reports yet — this is a monitoring view that fills itself from the
-  // nightly pipeline, so lead with that, not a manual-upload pitch.
   if (reports.length === 0) {
-    return (
-      <div className="mx-auto max-w-3xl px-6 py-16">
-        <Header />
-        <div className="rounded-xl border border-dashed border-rule bg-surface px-8 py-12 text-center">
-          <div className="mx-auto mb-4 inline-flex rounded-full bg-accent/10 p-3 text-accent">
-            <Clock className="h-6 w-6" />
-          </div>
-          <h2 className="font-serif text-2xl font-medium text-foreground">No reports yet</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
-            The nightly pipeline writes a report here automatically after each capture. The next one
-            will appear after tonight's run — this page refreshes on its own.
-          </p>
-        </div>
-
-        <div className="mt-6">
-          <UploadCard onLoad={handleLoad} />
-        </div>
-      </div>
-    );
+    return <UploadDropzone onLoad={handleLoad} />;
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16">
-      <Header
-        subtitle={`${reports.length} ${reports.length === 1 ? "report" : "reports"} available.`}
-      />
+    <div className="mx-auto max-w-4xl px-6 py-12">
+      <Masthead reports={reports} />
+      <VerdictStrip reports={reports} />
 
-      <div className="mb-6">
+      <section className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {DEFAULT_CARDS.map((card) => {
+          const series = numericSeries(reports, card.key);
+          const regression = regressionFor(series, card);
+          return (
+            <MetricCard
+              key={card.key as string}
+              card={card}
+              series={series}
+              regression={regression}
+            />
+          );
+        })}
+      </section>
+
+      <div className="mb-4 flex items-baseline justify-between">
+        <h2 className="font-serif text-xl font-medium tracking-tight text-foreground">Reports</h2>
+        <span className="text-xs text-muted-foreground">
+          {reports.length} {reports.length === 1 ? "night" : "nights"} on this device
+        </span>
+      </div>
+
+      <div className="mb-5">
         <UploadCard onLoad={handleLoad} />
       </div>
 

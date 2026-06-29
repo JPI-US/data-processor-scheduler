@@ -20,11 +20,10 @@ function ReportPage() {
       setReport(local);
       return;
     }
-    // Not in localStorage — try fetching from the server report files.
+    // Not in localStorage — try the pipeline report files on the server.
     fetchServerReport(id).then(setReport);
   }, [id]);
 
-  // Still loading
   if (report === undefined) {
     return (
       <div className="flex min-h-screen items-center justify-center px-6">

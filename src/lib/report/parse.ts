@@ -1,4 +1,4 @@
-﻿export type Status = "pass" | "fail" | "warn" | null;
+export type Status = "pass" | "fail" | "warn" | null;
 
 export function detectStatus(text: string): Status {
   const t = text.toLowerCase();
@@ -19,28 +19,35 @@ export interface ReportMeta {
   body: string; // markdown with title+meta+verdict stripped
 }
 
+export function stripLeadingComments(markdown: string): string {
+  // Remove any leading whitespace + HTML comment blocks (possibly multi-line),
+  // repeatedly, so the rest of the parser sees the first real line as the title.
+  let s = markdown.replace(/^\uFEFF/, "");
+  while (true) {
+    const trimmed = s.replace(/^\s+/, "");
+    if (!trimmed.startsWith("<!--")) {
+      s = trimmed;
+      break;
+    }
+    const end = trimmed.indexOf("-->");
+    if (end === -1) {
+      // Unterminated comment; bail out and let downstream handle it.
+      s = trimmed;
+      break;
+    }
+    s = trimmed.slice(end + 3);
+  }
+  return s;
+}
+
 export function parseReport(markdown: string): ReportMeta {
-  const lines = markdown.split("\n");
+  const lines = stripLeadingComments(markdown).split("\n");
   let i = 0;
   let title = "Untitled Report";
   const metaLines: { key: string; value: string }[] = [];
 
-  // Skip leading blank lines AND HTML comment blocks. process_log.py emits a
-  // <!--axum-metrics ... --> block above the title; without this, the first
-  // non-blank line would be the comment and title/meta/verdict detection would
-  // silently fail on every generated report.
-  while (i < lines.length) {
-    if (lines[i].trim() === "") {
-      i++;
-      continue;
-    }
-    if (lines[i].trimStart().startsWith("<!--")) {
-      while (i < lines.length && !lines[i].includes("-->")) i++;
-      if (i < lines.length) i++; // consume the closing --> line
-      continue;
-    }
-    break;
-  }
+  // skip blank lines
+  while (i < lines.length && lines[i].trim() === "") i++;
 
   // title (first h1)
   if (i < lines.length && lines[i].startsWith("# ")) {
@@ -52,7 +59,7 @@ export function parseReport(markdown: string): ReportMeta {
   while (i < lines.length && lines[i].trim() !== "") {
     const line = lines[i];
     // split on "·" or "•" to allow multiple per line
-    const parts = line.split(/\s+[·•|]\s+/);
+    const parts = line.split(/\s+[·•]\s+/);
     for (const part of parts) {
       const m = part.match(/^\*\*([^*]+):\*\*\s*(.+)$/);
       if (m) metaLines.push({ key: m[1].trim(), value: m[2].trim() });

@@ -1,4 +1,5 @@
 import { detectStatus, parseReport, type Status } from "./parse";
+import { extractMetrics, type AxumMetrics } from "./metrics";
 
 export interface SubsystemStatus {
   name: string;
@@ -14,8 +15,10 @@ export interface SavedReport {
   title: string;
   verdict: { status: Status; label: string; summary: string } | null;
   subsystems: SubsystemStatus[];
-  source: string; // raw markdown content
-  fromServer?: boolean; // true = lives on disk, not deletable from the UI
+  metrics: AxumMetrics | null;
+  source: string;
+  /** true = written by the pipeline (lives on disk), not deletable from the UI. */
+  fromServer?: boolean;
 }
 
 const KEY = "report-viewer:reports";
@@ -26,6 +29,10 @@ export function getReports(): SavedReport[] {
     const raw = localStorage.getItem(KEY);
     if (!raw) return [];
     const list = JSON.parse(raw) as SavedReport[];
+    // Backfill metrics for entries saved before the metrics block existed.
+    for (const r of list) {
+      if (r.metrics === undefined) r.metrics = extractMetrics(r.source);
+    }
     return list.sort((a, b) => (a.date < b.date ? 1 : -1));
   } catch {
     return [];
@@ -42,6 +49,29 @@ export function deleteReport(id: string) {
   window.dispatchEvent(new Event("reports-changed"));
 }
 
+/** Build a SavedReport from raw markdown (shared by uploads and server fetch). */
+export function buildSavedReport(
+  source: string,
+  fileName: string,
+  fromServer = false,
+): SavedReport {
+  const parsed = parseReport(source);
+  const metrics = extractMetrics(source);
+  const date = metrics?.session_date ?? extractDate(parsed.metaLines) ?? today();
+  return {
+    id: date,
+    date,
+    uploadedAt: Date.now(),
+    fileName,
+    title: parsed.title,
+    verdict: parsed.verdict,
+    subsystems: extractSubsystems(parsed.body),
+    metrics,
+    source,
+    fromServer,
+  };
+}
+
 export function saveReport(source: string, fileName: string): SavedReport {
   const saved = buildSavedReport(source, fileName);
   const existing = getReports().filter((r) => r.id !== saved.id);
@@ -50,22 +80,19 @@ export function saveReport(source: string, fileName: string): SavedReport {
   return saved;
 }
 
-/** Fetch a single server report by date id, e.g. "2026-06-28". */
+/** Fetch one server report by date id, e.g. "2026-06-28". */
 export async function fetchServerReport(id: string): Promise<SavedReport | null> {
   try {
-    const filename = `axum_report_${id}.md`;
-    const src = await fetch(`/reports/${filename}`).then((r) => {
-      if (!r.ok) return null;
-      return r.text();
-    });
-    if (!src) return null;
-    return buildSavedReport(src, filename, true);
+    const fileName = `axum_report_${id}.md`;
+    const res = await fetch(`/reports/${fileName}`);
+    if (!res.ok) return null;
+    return buildSavedReport(await res.text(), fileName, true);
   } catch {
     return null;
   }
 }
 
-/** Fetch all reports that process_log.py has written to public/reports/. */
+/** Fetch every report the pipeline has written to public/reports/. */
 export async function fetchServerReports(): Promise<SavedReport[]> {
   try {
     const res = await fetch("/reports/index.json");
@@ -73,10 +100,10 @@ export async function fetchServerReports(): Promise<SavedReport[]> {
     const data = (await res.json()) as { reports: string[] };
     if (!Array.isArray(data.reports)) return [];
     const results = await Promise.all(
-      data.reports.map(async (filename) => {
+      data.reports.map(async (fileName) => {
         try {
-          const src = await fetch(`/reports/${filename}`).then((r) => r.text());
-          return buildSavedReport(src, filename, true);
+          const src = await fetch(`/reports/${fileName}`).then((r) => r.text());
+          return buildSavedReport(src, fileName, true);
         } catch {
           return null;
         }
@@ -86,25 +113,6 @@ export async function fetchServerReports(): Promise<SavedReport[]> {
   } catch {
     return [];
   }
-}
-
-// ---------- private helpers ----------
-
-function buildSavedReport(source: string, fileName: string, fromServer = false): SavedReport {
-  const parsed = parseReport(source);
-  const date =
-    extractDate(parsed.metaLines) ?? fileName.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? today();
-  return {
-    id: date,
-    date,
-    uploadedAt: Date.now(),
-    fileName,
-    title: parsed.title,
-    verdict: parsed.verdict,
-    subsystems: extractSubsystems(parsed.body),
-    source,
-    fromServer,
-  };
 }
 
 function today(): string {
@@ -128,9 +136,11 @@ function extractSubsystems(body: string): SubsystemStatus[] {
   const lines = body.split("\n");
   let i = lines.findIndex((l) => /^##\s+.*subsystem/i.test(l));
   if (i === -1) return [];
+  // walk forward to a table
   while (i < lines.length && !lines[i].trim().startsWith("|")) i++;
   if (i >= lines.length) return [];
   const rows: SubsystemStatus[] = [];
+  // skip header + separator
   let j = i + 2;
   while (j < lines.length && lines[j].trim().startsWith("|")) {
     const cells = lines[j]
@@ -138,7 +148,11 @@ function extractSubsystems(body: string): SubsystemStatus[] {
       .slice(1, -1)
       .map((c) => c.trim());
     if (cells.length >= 2) {
-      rows.push({ name: cells[0], status: detectStatus(cells[1]), note: cells[2] });
+      rows.push({
+        name: cells[0],
+        status: detectStatus(cells[1]),
+        note: cells[2],
+      });
     }
     j++;
   }

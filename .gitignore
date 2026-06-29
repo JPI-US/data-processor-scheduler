@@ -20,6 +20,8 @@ logs/
 !*.log.example
 public/reports/
 
+plan
+
 # Python bytecode
 __pycache__/
 *.pyc
