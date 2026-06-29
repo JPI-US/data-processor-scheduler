@@ -11,6 +11,7 @@ import { StatusPill } from "./StatusPill";
 import { ArrowRight, Trash2 } from "lucide-react";
 import type { SavedReport } from "@/lib/report/storage";
 import { deleteReport } from "@/lib/report/storage";
+import { subsystemsFromMetrics } from "@/lib/report/subsystems";
 
 export function ReportSummaryDialog({
   report,
@@ -60,21 +61,36 @@ export function ReportSummaryDialog({
             </div>
           )}
 
-          {report.subsystems.length > 0 && (
-            <div>
-              <div className="mb-2 text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                Subsystems
+          {(() => {
+            const derived = subsystemsFromMetrics(report.metrics);
+            const rows =
+              derived.length > 0
+                ? derived
+                : report.subsystems.map((s) => ({ name: s.name, status: s.status, value: "" }));
+            if (rows.length === 0) return null;
+            return (
+              <div>
+                <div className="mb-2 text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  Subsystems
+                </div>
+                <ul className="divide-y divide-rule rounded-lg border border-rule">
+                  {rows.map((s) => (
+                    <li key={s.name} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <span className="text-sm font-medium text-foreground">{s.name}</span>
+                      <div className="flex items-center gap-2">
+                        {s.value && (
+                          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                            {s.value}
+                          </span>
+                        )}
+                        <StatusPill status={s.status} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul className="divide-y divide-rule rounded-lg border border-rule">
-                {report.subsystems.map((s) => (
-                  <li key={s.name} className="flex items-center justify-between gap-3 px-3 py-2">
-                    <span className="text-sm font-medium text-foreground">{s.name}</span>
-                    <StatusPill status={s.status} />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         <DialogFooter className="flex-row items-center justify-between gap-2 border-t border-rule px-6 py-3 sm:justify-between">

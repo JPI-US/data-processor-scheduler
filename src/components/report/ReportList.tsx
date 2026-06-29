@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { SavedReport } from "@/lib/report/storage";
+import type { Status } from "@/lib/report/parse";
+import { subsystemsFromMetrics } from "@/lib/report/subsystems";
 import { StatusPill } from "./StatusPill";
 import { ReportSummaryDialog } from "./ReportSummaryDialog";
 
@@ -11,7 +13,7 @@ export function ReportList({ reports }: { reports: SavedReport[] }) {
       <div className="overflow-hidden rounded-xl border border-rule bg-surface">
         <div className="grid grid-cols-[7rem_1fr_auto] items-center gap-4 border-b border-rule bg-surface-2 px-5 py-2.5 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
           <div>Date</div>
-          <div>Metrics</div>
+          <div>Subsystems</div>
           <div className="text-right">Verdict</div>
         </div>
         <ul className="divide-y divide-rule">
@@ -25,7 +27,7 @@ export function ReportList({ reports }: { reports: SavedReport[] }) {
                   {formatShort(r.date)}
                 </div>
                 <div className="min-w-0">
-                  <MetricStrip report={r} />
+                  <SubsystemStrip report={r} />
                 </div>
                 <div className="justify-self-end">
                   {r.verdict && <StatusPill status={r.verdict.status} label={r.verdict.label} />}
@@ -45,40 +47,32 @@ export function ReportList({ reports }: { reports: SavedReport[] }) {
   );
 }
 
-function MetricStrip({ report }: { report: SavedReport }) {
-  const m = report.metrics;
-  if (!m) {
+function pillClass(status: Status): string {
+  const base = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.68rem] font-medium";
+  if (status === "pass") return `${base} bg-[var(--color-pass-soft)] text-[var(--color-pass)]`;
+  if (status === "warn") return `${base} bg-[var(--color-warn-soft)] text-[var(--color-warn)]`;
+  if (status === "fail") return `${base} bg-[var(--color-fail-soft)] text-[var(--color-fail)]`;
+  return `${base} bg-muted text-muted-foreground`;
+}
+
+function SubsystemStrip({ report }: { report: SavedReport }) {
+  const subs = subsystemsFromMetrics(report.metrics);
+  if (subs.length === 0) {
     return (
       <div className="truncate font-serif text-base font-medium text-foreground">
         {report.title}
       </div>
     );
   }
-  const parts: { label: string; value: string }[] = [];
-  if (m.mqtt_uptime_pct !== null)
-    parts.push({ label: "MQTT", value: `${m.mqtt_uptime_pct.toFixed(0)}%` });
-  if (m.motion_completion_pct !== null)
-    parts.push({ label: "Motion", value: `${m.motion_completion_pct.toFixed(0)}%` });
-  if (m.dns_failures_per_hour !== null)
-    parts.push({ label: "DNS", value: m.dns_failures_per_hour.toFixed(0) });
-  if (m.flagged_movements !== null)
-    parts.push({ label: "Flag", value: m.flagged_movements.toString() });
-  if (m.crashes !== null && m.crashes > 0)
-    parts.push({ label: "Crash", value: m.crashes.toString() });
-
   return (
-    <div className="flex items-center gap-4 font-mono text-xs tabular-nums text-foreground">
-      {parts.map((p) => (
-        <span key={p.label} className="inline-flex items-baseline gap-1">
-          <span className="text-muted-foreground">{p.label}</span>
-          <span className="font-medium">{p.value}</span>
+    <div className="flex flex-wrap items-center gap-1.5">
+      {subs.map((s) => (
+        <span key={s.name} className={pillClass(s.status)}>
+          <span className="h-1 w-1 rounded-full bg-current opacity-70" />
+          {s.name}
+          <span className="font-semibold tabular-nums">{s.value}</span>
         </span>
       ))}
-      {parts.length === 0 && (
-        <span className="truncate font-serif text-base font-medium not-italic text-foreground">
-          {report.title}
-        </span>
-      )}
     </div>
   );
 }
