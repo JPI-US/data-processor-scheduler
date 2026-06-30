@@ -129,29 +129,44 @@ def main():
     print(f"  Next rollover : {st['roll']:%Y-%m-%d %H:%M}")
     print("=" * 66)
 
-    proc = subprocess.Popen(
-        capture_cmd(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        stdin=None,                 # inherit console stdin so CTRL+R reaches espflash
-        text=True,
-        bufsize=1,
-        encoding="utf-8",
-        errors="replace",
-    )
     timer = threading.Thread(target=timer_loop, daemon=True)
     timer.start()
+    proc = None
     try:
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            ts = datetime.datetime.now()
-            with lock:
-                if ts >= st["roll"]:      # timer usually beats us; harmless if so
-                    do_rollover(ts)
-                stamp = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                st["f"].write(f"[{stamp}] {line}\n")
-                st["f"].flush()
-                st["lines"] += 1
+        # Reattach loop: when the device reboots (its USB-CDC re-enumerates on
+        # reset), espflash loses the port and exits. Continuous capture must
+        # survive that - so we just relaunch espflash and keep going. This is
+        # essential because the firmware reboot-loops on the Wi-Fi ESP_ERR_TIMEOUT
+        # bug, especially at night; we want to CAPTURE that, not die with it.
+        while not stop.is_set():
+            proc = subprocess.Popen(
+                capture_cmd(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=None,             # inherit console stdin so CTRL+R reaches espflash
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+            )
+            print(f"[daemon] espflash attached (PID {proc.pid}) -> {os.path.basename(st['path'])}")
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                ts = datetime.datetime.now()
+                with lock:
+                    if ts >= st["roll"]:      # timer usually beats us; harmless if so
+                        do_rollover(ts)
+                    stamp = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                    st["f"].write(f"[{stamp}] {line}\n")
+                    st["f"].flush()
+                    st["lines"] += 1
+                print(line)               # echo so capture is visibly live
+            proc.wait()
+            if stop.is_set():
+                break
+            print("[daemon] espflash exited (device reset / USB re-enumerate) "
+                  "- reattaching in 3 s ...")
+            stop.wait(3)
     except KeyboardInterrupt:
         print("\n[daemon] CTRL+C - stopping capture.")
     finally:
@@ -161,11 +176,15 @@ def main():
                 st["f"].close()
             except Exception:
                 pass
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:
-            proc.kill()
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
         print("[daemon] stopped.")
 
 
