@@ -166,31 +166,58 @@ def summarize_movements(rows):
     return "\n".join(out)
 
 
-def collapse_events(rows):
-    seq = [(ts, b) for ts, b in rows if not TICK.search(b) and b.strip()]
-    norm = [UPTIME.sub(r"\1", b) for _, b in seq]
-    out, i, n = [], 0, len(seq)
-    while i < n:
-        best_p, best_reps = 1, 1
-        for p in range(1, 13):                 # try block lengths 1..12
-            if i + 2*p > n:
-                break
-            reps = 1
-            while (i + (reps+1)*p <= n and
-                   norm[i+reps*p:i+(reps+1)*p] == norm[i:i+p]):
-                reps += 1
-            if reps >= 2 and reps*p > best_reps*best_p:
-                best_p, best_reps = p, reps
-        if best_reps >= 2:
-            block = seq[i:i+best_p]
-            last_ts = seq[i + best_reps*best_p - 1][0]
-            out.append(f"[block x{best_reps}, {block[0][0]}-{last_ts}]")
-            out.extend(f"    {b}" for _, b in block)
-            i += best_reps * best_p
+def classify_and_rollup(rows):
+    """Classify each non-tick, non-movement line and collapse repeating noise to
+    a per-category summary, keeping meaningful + novel events verbatim.
+
+    This is what keeps a full continuous day small: a quiet good day is mostly
+    sun-tracking telemetry (TRACKING_CYCLE), a bad day is mostly the MQTT/DNS
+    cascade (MQTT_CONN_FAIL/DNS_FAIL) - both collapse to one line each. Unknown
+    lines that repeat a lot collapse by normalized form; rare ones stay verbatim
+    so a novel issue is never hidden."""
+    import signatures as sig
+    UNKNOWN_ROLLUP_MIN = 4   # an unknown pattern repeating >= this = noise
+
+    # pass 1: classify + count rollup keys
+    items, counts = [], {}
+    for ts, b in rows:
+        if not b.strip() or TICK.search(b) or ON in b or OFF.search(b):
+            continue
+        cat, mode = sig.classify(b)
+        if mode == sig.EVENT:
+            key = None
+        elif mode == sig.ROLLUP:
+            key = cat
+        else:                                   # unknown -> key by normalized form
+            key = "~" + sig.normalize(b)
+        items.append((ts, b, cat, mode, key))
+        if key is not None:
+            counts[key] = counts.get(key, 0) + 1
+
+    # pass 2: build rollups + a chronological event log
+    rollups, order, events = {}, [], []
+    for ts, b, cat, mode, key in items:
+        roll = (mode == sig.ROLLUP) or (mode is None and counts.get(key, 0) >= UNKNOWN_ROLLUP_MIN)
+        if not roll:
+            tag = f"[{cat}] " if cat else ""
+            events.append(f"[{ts}] {tag}{b}")
+            continue
+        r = rollups.get(key)
+        if r is None:
+            rollups[key] = [1, ts, ts, (cat or "noise"), sig.message(b)]
+            order.append(key)
         else:
-            ts, b = seq[i]
-            out.append(f"[{ts}] {b}")
-            i += 1
+            r[0] += 1
+            r[2] = ts
+
+    out = ["=== ACTIVITY ROLLUP (repeating lines collapsed: count, window, example) ==="]
+    for key in sorted(order, key=lambda k: -rollups[k][0]):
+        n, t0, t1, label, ex = rollups[key]
+        win = f"{t0} - {t1}" if t0 != t1 else f"{t0}"
+        out.append(f"  {label:<16} {n:>6}x  {win}  e.g. \"{ex[:80]}\"")
+    out.append("")
+    out.append("=== EVENT LOG (meaningful + novel lines, chronological) ===")
+    out.extend(events)
     return "\n".join(out)
 
 
@@ -364,8 +391,8 @@ def metrics_block(metrics):
 def build_digest(path):
     rows = decode(path)
     digest = (summarize_movements(rows)
-              + "\n\n=== EVENT LOG (repeating blocks collapsed) ===\n"
-              + collapse_events(rows))
+              + "\n\n"
+              + classify_and_rollup(rows))
     return rows, digest
 
 
