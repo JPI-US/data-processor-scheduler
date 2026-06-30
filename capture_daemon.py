@@ -26,6 +26,7 @@ import os
 import sys
 import json
 import datetime
+import threading
 import subprocess
 
 # ----------------------------------------------------------------- config ----
@@ -33,7 +34,9 @@ import subprocess
 # at a LAN-shared folder, and so it can be dry-run-tested without the device.
 PORT            = os.environ.get("AXUM_PORT", "COM11")
 LOG_DIR         = os.environ.get("AXUM_LOG_DIR", r"D:\scheduler\logs")
-PROCESSOR       = os.environ.get("AXUM_PROCESSOR", r"D:\scheduler\process_log.py")
+# The daemon hands each closed slice to report_and_retain.py (report + digest +
+# verdict-based retention). Override AXUM_REPORTER to point elsewhere / for tests.
+REPORTER        = os.environ.get("AXUM_REPORTER", r"D:\scheduler\report_and_retain.py")
 PYTHON          = sys.executable          # same interpreter running this script
 ROLLOVER_HOUR   = 23                       # 11 PM local
 MIN_SLICE_LINES = 50                       # skip report if a slice is this short
@@ -73,31 +76,57 @@ def open_slice(path):
 
 
 def kick_report(path, lines):
-    """Launch report generation on a closed slice, detached (non-blocking)."""
+    """Hand a closed slice to report_and_retain.py, detached (non-blocking)."""
     name = os.path.basename(path)
     if lines < MIN_SLICE_LINES:
         print(f"[daemon] {name}: only {lines} lines - skipping report (too short).")
         return
-    print(f"[daemon] {name}: generating report in the background ...")
+    print(f"[daemon] {name}: report + retention in the background ...")
     flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
-    subprocess.Popen([PYTHON, PROCESSOR, path], creationflags=flags)
+    subprocess.Popen([PYTHON, REPORTER, path], creationflags=flags)
 
 
 def main():
     os.makedirs(LOG_DIR, exist_ok=True)
-    now = datetime.datetime.now()
-    roll = next_rollover(now)
-    path = slice_path(roll)
-    f = open_slice(path)
-    lines = 0
+    # Shared state guarded by `lock`: both the capture loop and the timer thread
+    # touch the file handle + rollover boundary, so all access is serialized.
+    st = {"roll": next_rollover(datetime.datetime.now())}
+    st["path"] = slice_path(st["roll"])
+    st["f"] = open_slice(st["path"])
+    st["lines"] = 0
+    lock = threading.Lock()
+    stop = threading.Event()
+
+    def do_rollover(ts):
+        """Caller holds lock: close the day's slice, open the next, fire report."""
+        st["f"].close()
+        closed_path, closed_lines = st["path"], st["lines"]
+        st["roll"] = next_rollover(ts)
+        st["path"] = slice_path(st["roll"])
+        st["f"] = open_slice(st["path"])
+        st["lines"] = 0
+        print(f"[daemon] rolled over -> {os.path.basename(st['path'])} "
+              f"(next {st['roll']:%m-%d %H:%M})")
+        kick_report(closed_path, closed_lines)
+
+    def timer_loop():
+        """Force the rollover at the boundary even if the device is silent."""
+        while not stop.is_set():
+            wait = (st["roll"] - datetime.datetime.now()).total_seconds()
+            if wait > 0:
+                stop.wait(min(wait, 30))     # re-check at least every 30 s
+                continue
+            with lock:
+                if datetime.datetime.now() >= st["roll"]:
+                    do_rollover(datetime.datetime.now())
 
     print("=" * 66)
     print("  AXUM CONTINUOUS CAPTURE")
-    print("  >> Press CTRL+R ONCE now to start the device streaming.")
+    print("  >> Press CTRL+R ONCE if no lines appear in ~20 s.")
     print("  >> Then leave this running - it auto-slices + reports at 11 PM daily.")
     print("  >> CTRL+C to stop.")
-    print(f"  Logging to    : {path}")
-    print(f"  Next rollover : {roll:%Y-%m-%d %H:%M}")
+    print(f"  Logging to    : {st['path']}")
+    print(f"  Next rollover : {st['roll']:%Y-%m-%d %H:%M}")
     print("=" * 66)
 
     proc = subprocess.Popen(
@@ -110,34 +139,28 @@ def main():
         encoding="utf-8",
         errors="replace",
     )
+    timer = threading.Thread(target=timer_loop, daemon=True)
+    timer.start()
     try:
         for line in proc.stdout:
             line = line.rstrip("\n")
             ts = datetime.datetime.now()
-
-            # Rollover BEFORE writing, so this line lands in the new day's file.
-            if ts >= roll:
-                f.close()
-                closed_path, closed_lines = path, lines
-                roll = next_rollover(ts)
-                path = slice_path(roll)
-                f = open_slice(path)
-                lines = 0
-                print(f"[daemon] rolled over -> {os.path.basename(path)} "
-                      f"(next {roll:%m-%d %H:%M})")
-                kick_report(closed_path, closed_lines)
-
-            stamp = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            f.write(f"[{stamp}] {line}\n")
-            f.flush()
-            lines += 1
+            with lock:
+                if ts >= st["roll"]:      # timer usually beats us; harmless if so
+                    do_rollover(ts)
+                stamp = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                st["f"].write(f"[{stamp}] {line}\n")
+                st["f"].flush()
+                st["lines"] += 1
     except KeyboardInterrupt:
         print("\n[daemon] CTRL+C - stopping capture.")
     finally:
-        try:
-            f.close()
-        except Exception:
-            pass
+        stop.set()
+        with lock:
+            try:
+                st["f"].close()
+            except Exception:
+                pass
         try:
             proc.terminate()
             proc.wait(timeout=5)
