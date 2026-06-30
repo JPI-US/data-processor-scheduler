@@ -39,6 +39,7 @@ const CLIENT_DIR = join(__dirname, "dist", "client");
 // Test/normal classification labels live in a LOCAL writable file (NOT the
 // read-only reports mount) so the web app owns them. Keyed by report date.
 const LABELS_FILE = process.env.LABELS_FILE || join(__dirname, "data", "labels.json");
+const VERSIONS_FILE = process.env.VERSIONS_FILE || join(__dirname, "data", "versions.json");
 // REPORTS_DIR is env-overridable so JantaServer can point it at the LAN-mounted
 // reports folder from the Monitor PC (e.g. REPORTS_DIR=/mnt/axum-reports).
 // Defaults to the local public/reports for single-machine use.
@@ -116,21 +117,24 @@ async function ssr(req, res) {
   }
 }
 
-function readLabels() {
+function readJsonFile(file) {
   try {
-    const obj = JSON.parse(readFileSync(LABELS_FILE, "utf-8"));
+    const obj = JSON.parse(readFileSync(file, "utf-8"));
     return obj && typeof obj === "object" ? obj : {};
   } catch {
     return {};
   }
 }
 
-function writeLabels(obj) {
-  mkdirSync(dirname(LABELS_FILE), { recursive: true });
-  const tmp = LABELS_FILE + ".tmp";
+function writeJsonFile(file, obj) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = file + ".tmp";
   writeFileSync(tmp, JSON.stringify(obj, null, 2));
-  renameSync(tmp, LABELS_FILE);
+  renameSync(tmp, file);
 }
+
+const readLabels = () => readJsonFile(LABELS_FILE);
+const writeLabels = (o) => writeJsonFile(LABELS_FILE, o);
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -175,16 +179,47 @@ const server = http.createServer(async (req, res) => {
         const runType = payload.run_type === "test" ? "test" : "normal";
         const testName = payload.test_name ? String(payload.test_name).slice(0, 80) : "";
         const note = payload.note ? String(payload.note).slice(0, 280) : "";
-        if (runType === "normal" && !note && !testName) {
-          delete labels[date]; // default normal + no note: nothing to store
+        const version = payload.version ? String(payload.version).slice(0, 40) : "";
+        if (runType === "normal" && !note && !testName && !version) {
+          delete labels[date]; // default normal + nothing set: nothing to store
         } else {
           labels[date] = { run_type: runType };
           if (testName) labels[date].test_name = testName;
+          if (version) labels[date].version = version;
           if (note) labels[date].note = note;
         }
         writeLabels(labels);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(labels[date] || { run_type: "normal" }));
+        return;
+      }
+    }
+
+    // 0b. Version registry (stable / deployment / testing), editable.
+    if (path === "/versions") {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(readJsonFile(VERSIONS_FILE)));
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("bad json");
+          return;
+        }
+        const clean = (v) => (v ? String(v).slice(0, 40) : "");
+        const versions = {
+          stable: clean(payload.stable),
+          deployment: clean(payload.deployment),
+          testing: clean(payload.testing),
+        };
+        writeJsonFile(VERSIONS_FILE, versions);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(versions));
         return;
       }
     }

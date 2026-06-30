@@ -14,8 +14,19 @@ export type RunType = "normal" | "test";
 export interface RunLabel {
   run_type: RunType;
   test_name?: string;
+  /** Firmware version override for a normal run (defaults to deployment). */
+  version?: string;
   note?: string;
 }
+
+/** The editable version registry (named tracks -> version strings). */
+export interface Versions {
+  stable: string;
+  deployment: string;
+  testing: string;
+}
+
+export const EMPTY_VERSIONS: Versions = { stable: "", deployment: "", testing: "" };
 
 export interface SavedReport {
   id: string; // date key e.g. "2026-06-27"
@@ -57,6 +68,36 @@ export async function setLabel(date: string, label: RunLabel): Promise<RunLabel>
   if (!res.ok) throw new Error(`setLabel failed: ${res.status}`);
   window.dispatchEvent(new Event("labels-changed"));
   return (await res.json()) as RunLabel;
+}
+
+/** Fetch the version registry. */
+export async function fetchVersions(): Promise<Versions> {
+  try {
+    const res = await fetch("/versions");
+    if (!res.ok) return { ...EMPTY_VERSIONS };
+    const v = (await res.json()) as Partial<Versions>;
+    return { stable: v.stable ?? "", deployment: v.deployment ?? "", testing: v.testing ?? "" };
+  } catch {
+    return { ...EMPTY_VERSIONS };
+  }
+}
+
+/** Save the version registry. */
+export async function setVersions(versions: Versions): Promise<void> {
+  const res = await fetch("/versions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(versions),
+  });
+  if (!res.ok) throw new Error(`setVersions failed: ${res.status}`);
+  window.dispatchEvent(new Event("versions-changed"));
+}
+
+/** A normal run's effective version = its override, else the deployment version. */
+export function effectiveVersion(report: SavedReport, versions: Versions): string {
+  if (report.label?.version) return report.label.version;
+  if (report.label?.run_type === "test") return "";
+  return versions.deployment || "";
 }
 
 export function getReports(): SavedReport[] {

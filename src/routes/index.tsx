@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { UploadDropzone } from "@/components/report/UploadDropzone";
 import { UploadCard } from "@/components/report/UploadCard";
@@ -5,8 +6,13 @@ import { ReportList } from "@/components/report/ReportList";
 import { Masthead } from "@/components/overview/Masthead";
 import { VerdictStrip } from "@/components/overview/VerdictStrip";
 import { MetricCard } from "@/components/overview/MetricCard";
+import {
+  OverviewControls,
+  DEFAULT_VIEW,
+  type OverviewView,
+} from "@/components/overview/OverviewControls";
 import { useReports } from "@/lib/report/useReports";
-import { saveReport } from "@/lib/report/storage";
+import { effectiveVersion, saveReport } from "@/lib/report/storage";
 import { DEFAULT_CARDS } from "@/lib/report/metrics";
 import { numericSeries, regressionFor } from "@/lib/report/trends";
 
@@ -30,11 +36,27 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
-  const { reports, loading } = useReports();
+  const { reports, versions, loading } = useReports();
+  const [view, setView] = useState<OverviewView>(DEFAULT_VIEW);
 
   const handleLoad = (text: string, name: string) => {
     saveReport(text, name);
   };
+
+  // The slice the trend layer (strip / cards / streak) is computed over.
+  const trendReports = useMemo(() => {
+    if (view.category === "test") {
+      return reports.filter(
+        (r) =>
+          r.label?.run_type === "test" &&
+          (view.testName === "all" || r.label.test_name === view.testName),
+      );
+    }
+    return reports.filter((r) => {
+      if (r.label?.run_type === "test") return false;
+      return view.version === "all" || effectiveVersion(r, versions) === view.version;
+    });
+  }, [reports, versions, view]);
 
   // While the server fetch is in flight, show a neutral skeleton so we don't
   // flash the upload screen when pipeline reports are about to appear.
@@ -61,19 +83,15 @@ function Index() {
     return <UploadDropzone onLoad={handleLoad} />;
   }
 
-  // Trends, strip, and streak use NORMAL runs only - test nights (experiments)
-  // would otherwise pollute the baselines and the failing-streak headline.
-  const normalReports = reports.filter((r) => r.label?.run_type !== "test");
-  const testCount = reports.length - normalReports.length;
-
   return (
     <div className="mx-auto max-w-4xl px-6 py-12">
-      <Masthead reports={normalReports} />
-      <VerdictStrip reports={normalReports} />
+      <OverviewControls reports={reports} versions={versions} view={view} onView={setView} />
+      <Masthead reports={trendReports} />
+      <VerdictStrip reports={trendReports} />
 
       <section className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {DEFAULT_CARDS.map((card) => {
-          const series = numericSeries(normalReports, card.key);
+          const series = numericSeries(trendReports, card.key);
           const regression = regressionFor(series, card);
           return (
             <MetricCard
@@ -89,8 +107,8 @@ function Index() {
       <div className="mb-4 flex items-baseline justify-between">
         <h2 className="font-serif text-xl font-medium tracking-tight text-foreground">Reports</h2>
         <span className="text-xs text-muted-foreground">
-          {reports.length} {reports.length === 1 ? "night" : "nights"}
-          {testCount > 0 && ` · ${testCount} test excluded from trends`}
+          {reports.length} {reports.length === 1 ? "night" : "nights"} · trend over{" "}
+          {trendReports.length}
         </span>
       </div>
 

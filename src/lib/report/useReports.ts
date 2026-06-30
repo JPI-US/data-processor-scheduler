@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import type { RunLabel, SavedReport } from "@/lib/report/storage";
-import { fetchLabels, fetchServerReports, getReports } from "@/lib/report/storage";
+import type { RunLabel, SavedReport, Versions } from "@/lib/report/storage";
+import {
+  EMPTY_VERSIONS,
+  fetchLabels,
+  fetchServerReports,
+  fetchVersions,
+  getReports,
+} from "@/lib/report/storage";
 
 export interface ReportsState {
   reports: SavedReport[];
+  versions: Versions;
   loading: boolean;
 }
 
@@ -11,14 +18,21 @@ export function useReports(): ReportsState {
   const [localReports, setLocalReports] = useState<SavedReport[]>([]);
   const [serverReports, setServerReports] = useState<SavedReport[]>([]);
   const [labels, setLabels] = useState<Record<string, RunLabel>>({});
+  const [versions, setVersions] = useState<Versions>(EMPTY_VERSIONS);
   const [loading, setLoading] = useState(true);
 
-  // Fetch classification labels (and refresh when one is changed in the UI).
+  // Fetch classification labels + version registry (refresh on UI changes).
   useEffect(() => {
-    const load = () => fetchLabels().then(setLabels);
-    load();
-    window.addEventListener("labels-changed", load);
-    return () => window.removeEventListener("labels-changed", load);
+    const loadLabels = () => fetchLabels().then(setLabels);
+    const loadVersions = () => fetchVersions().then(setVersions);
+    loadLabels();
+    loadVersions();
+    window.addEventListener("labels-changed", loadLabels);
+    window.addEventListener("versions-changed", loadVersions);
+    return () => {
+      window.removeEventListener("labels-changed", loadLabels);
+      window.removeEventListener("versions-changed", loadVersions);
+    };
   }, []);
 
   // Keep localStorage uploads in sync.
@@ -75,5 +89,5 @@ export function useReports(): ReportsState {
       .sort((a, b) => (a.date < b.date ? 1 : -1));
   }, [localReports, serverReports, labels]);
 
-  return { reports, loading };
+  return { reports, versions, loading };
 }
