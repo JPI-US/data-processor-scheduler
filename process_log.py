@@ -57,13 +57,18 @@ def _load_dotenv(path=".env"):
 _load_dotenv(os.path.join(os.path.dirname(__file__) or ".", ".env"))
 
 # ------------------------------------------------------------------ config ---
+# All env-overridable so the same script runs on this PC and (later) a server,
+# and so caps can be tuned to the API tier without code changes.
 API_KEY     = os.environ.get("ANTHROPIC_API_KEY")
-MODEL       = "claude-sonnet-4-6"             # sharper root-cause reasoning (~$2/mo)
-MAX_TOKENS  = 10000
+MODEL       = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+MAX_TOKENS  = int(os.environ.get("MAX_OUTPUT_TOKENS", "4000"))   # output cap (fits 4K/min tier)
+# Safety net only - smart preprocessing already gets digests well under this.
+# If a digest still exceeds the cap, it's truncated (head + tail kept).
+MAX_DIGEST_TOKENS = int(os.environ.get("MAX_DIGEST_TOKENS", "8000"))
 
-LOG_DIR     = r"D:\scheduler\logs"                          # where espflash writes the .log files
-PROMPT_PATH = r"D:\scheduler\axum_nightly_analysis_prompt.md"
-REPORTS_DIR = r"D:\scheduler\public\reports"                # source folder, served at /reports and NOT wiped by `npm run build`
+LOG_DIR     = os.environ.get("AXUM_LOG_DIR", r"D:\scheduler\logs")
+PROMPT_PATH = os.environ.get("AXUM_PROMPT_PATH", r"D:\scheduler\axum_nightly_analysis_prompt.md")
+REPORTS_DIR = os.environ.get("AXUM_REPORTS_DIR", r"D:\scheduler\public\reports")
 INGEST_URL  = None     # not needed with the static-folder approach
 
 RATIO_DEVIATION = 0.5   # flag a movement if |ratio - baseline| > 50% of baseline
@@ -388,20 +393,46 @@ def metrics_block(metrics):
     return f"<!--axum-metrics\n{json.dumps(metrics, indent=2)}\n-->"
 
 
+def _cap_digest(digest):
+    """Last-resort safety net: if smart preprocessing still leaves a digest over
+    the cap, keep the head + tail (boot/setup + end-of-day/crash) with a marker."""
+    budget = MAX_DIGEST_TOKENS * 4   # ~4 chars per token
+    if len(digest) <= budget:
+        return digest
+    head = digest[: int(budget * 0.6)]
+    tail = digest[-int(budget * 0.35):]
+    return (head + f"\n\n[... digest truncated to ~{MAX_DIGEST_TOKENS} tokens "
+            f"(smart preprocessing left it large) ...]\n\n" + tail)
+
+
 def build_digest(path):
     rows = decode(path)
     digest = (summarize_movements(rows)
               + "\n\n"
               + classify_and_rollup(rows))
-    return rows, digest
+    return rows, _cap_digest(digest)
+
+
+def _trend_context(prev_path):
+    """For trend context, inject only the previous report's metrics block +
+    verdict line (~0.4K tokens) instead of the whole report (~3K) - smaller and
+    cleaner, since trends key off the deterministic numbers anyway."""
+    txt = pathlib.Path(prev_path).read_text(encoding="utf-8")
+    parts = []
+    m = re.search(r"<!--axum-metrics\s*(.*?)-->", txt, re.S)
+    if m:
+        parts.append("Previous session metrics:\n" + m.group(1).strip())
+    v = re.search(r"^##\s*VERDICT:.*$", txt, re.M)
+    if v:
+        parts.append(v.group(0).strip())
+    return "\n\n".join(parts) if parts else txt
 
 
 def load_prompt_with_trend():
     prompt = pathlib.Path(PROMPT_PATH).read_text(encoding="utf-8")
     prev = sorted(glob.glob(os.path.join(REPORTS_DIR, "axum_report_*.md")))
     if prev:
-        prompt = prompt.replace(
-            "(none)", pathlib.Path(prev[-1]).read_text(encoding="utf-8"), 1)
+        prompt = prompt.replace("(none)", _trend_context(prev[-1]), 1)
     return prompt
 
 
@@ -459,21 +490,34 @@ def derive_report_date(rows, log_path):
     return report_date_from_log(log_path)
 
 
+def _atomic_write(path, text):
+    """Write via a temp file + atomic rename so a reader (incl. the web app over
+    a LAN mount) never sees a half-written file."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def deliver(report_md, log_path, date=None):
     if date is None:
         date = report_date_from_log(log_path)
     os.makedirs(REPORTS_DIR, exist_ok=True)
+
+    # Write the report FIRST (atomically), then the manifest LAST, so the web app
+    # never sees index.json list a report whose file isn't fully there yet.
     out = os.path.join(REPORTS_DIR, f"axum_report_{date}.md")
-    pathlib.Path(out).write_text(report_md, encoding="utf-8")
+    _atomic_write(out, report_md)
     print("Wrote", out)
 
-    # Rebuild the manifest the web app reads (/reports/index.json). Newest first.
     files = sorted(
         (os.path.basename(p) for p in glob.glob(os.path.join(REPORTS_DIR, "axum_report_*.md"))),
         reverse=True,
     )
-    index = os.path.join(REPORTS_DIR, "index.json")
-    pathlib.Path(index).write_text(json.dumps({"reports": files}, indent=2), encoding="utf-8")
+    _atomic_write(os.path.join(REPORTS_DIR, "index.json"),
+                  json.dumps({"reports": files}, indent=2))
     print(f"Updated manifest: {len(files)} report(s) in index.json")
 
     if INGEST_URL:
