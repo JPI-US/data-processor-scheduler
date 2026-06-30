@@ -28,7 +28,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const CLIENT_DIR = join(__dirname, "dist", "client");
-const REPORTS_DIR = join(__dirname, "public", "reports");
+// REPORTS_DIR is env-overridable so JantaServer can point it at the LAN-mounted
+// reports folder from the Monitor PC (e.g. REPORTS_DIR=/mnt/axum-reports).
+// Defaults to the local public/reports for single-machine use.
+const REPORTS_DIR = process.env.REPORTS_DIR || join(__dirname, "public", "reports");
 
 const MIME = {
   ".js": "text/javascript; charset=utf-8",
