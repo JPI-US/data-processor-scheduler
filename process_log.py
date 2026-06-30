@@ -219,7 +219,7 @@ def _crash_kind(reason):
     return reason[:48] if reason else "panic"
 
 
-def compute_metrics(rows, log_path):
+def compute_metrics(rows, log_path, report_date=None):
     """Deterministic per-session metrics, counted from the decoded log."""
     dts = [d for d in (_parse_ts(ts) for ts, _ in rows if ts) if d]
     session_min = round((dts[-1] - dts[0]).total_seconds() / 60) if len(dts) >= 2 else 0
@@ -333,7 +333,7 @@ def compute_metrics(rows, log_path):
 
     return {
         "schema": METRICS_SCHEMA,
-        "session_date": report_date_from_log(log_path),
+        "session_date": report_date or derive_report_date(rows, log_path),
         "firmware": firmware,
         "session_minutes": session_min,
         "boots": boots,
@@ -415,8 +415,26 @@ def report_date_from_log(log_path):
     return datetime.date.today().isoformat()
 
 
-def deliver(report_md, log_path):
-    date = report_date_from_log(log_path)
+def derive_report_date(rows, log_path):
+    """Date the report by the day the log's data PREDOMINANTLY covers, using the
+    host timestamps inside the log. This is robust to filenames that reflect the
+    capture-start time rather than the day captured - e.g. a file started at
+    23:09 on the 28th but covering all of the 29th must report as the 29th, not
+    overwrite the 28th. Falls back to the filename stamp, then today."""
+    counts = {}
+    for ts, _ in rows:
+        dt = _parse_ts(ts)
+        if dt:
+            d = dt.date().isoformat()
+            counts[d] = counts.get(d, 0) + 1
+    if counts:
+        return max(counts, key=counts.get)
+    return report_date_from_log(log_path)
+
+
+def deliver(report_md, log_path, date=None):
+    if date is None:
+        date = report_date_from_log(log_path)
     os.makedirs(REPORTS_DIR, exist_ok=True)
     out = os.path.join(REPORTS_DIR, f"axum_report_{date}.md")
     pathlib.Path(out).write_text(report_md, encoding="utf-8")
@@ -454,9 +472,10 @@ def main():
 
     print("Processing", log_path)
     rows, digest = build_digest(log_path)
-    metrics = compute_metrics(rows, log_path)
+    report_date = derive_report_date(rows, log_path)
+    metrics = compute_metrics(rows, log_path, report_date)
     print(f"  {len(rows):,} raw lines -> digest ~{len(digest)//4:,} tokens "
-          f"({digest.count(chr(10)):,} lines)")
+          f"({digest.count(chr(10)):,} lines) -> report date {report_date}")
 
     if "--digest-only" in sys.argv:
         print("\n" + metrics_block(metrics))
@@ -467,7 +486,7 @@ def main():
     # Phase 0: prepend the deterministic metrics block so the UI trends exact
     # numbers, not the model's prose. parse.ts strips it before rendering.
     report = metrics_block(metrics) + "\n\n" + report.lstrip()
-    deliver(report, log_path)
+    deliver(report, log_path, report_date)
 
 
 if __name__ == "__main__":
