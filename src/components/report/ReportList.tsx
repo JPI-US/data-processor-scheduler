@@ -25,6 +25,14 @@ export function ReportList({ reports }: { reports: SavedReport[] }) {
               >
                 <div className="font-mono text-sm tabular-nums text-muted-foreground">
                   {formatShort(r.date)}
+                  {r.label?.run_type === "test" && (
+                    <span
+                      className="ml-1.5 rounded bg-accent/15 px-1 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-accent"
+                      title={r.label.test_name || "test run"}
+                    >
+                      test
+                    </span>
+                  )}
                 </div>
                 <div className="min-w-0">
                   <SubsystemStrip report={r} />

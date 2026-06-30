@@ -12,6 +12,7 @@ import { ArrowRight, Trash2 } from "lucide-react";
 import type { SavedReport } from "@/lib/report/storage";
 import { deleteReport } from "@/lib/report/storage";
 import { subsystemsFromMetrics } from "@/lib/report/subsystems";
+import { ClassificationControl } from "./ClassificationControl";
 
 export function ReportSummaryDialog({
   report,
@@ -91,6 +92,8 @@ export function ReportSummaryDialog({
               </div>
             );
           })()}
+
+          <ClassificationControl report={report} />
         </div>
 
         <DialogFooter className="flex-row items-center justify-between gap-2 border-t border-rule px-6 py-3 sm:justify-between">

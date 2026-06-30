@@ -61,14 +61,19 @@ function Index() {
     return <UploadDropzone onLoad={handleLoad} />;
   }
 
+  // Trends, strip, and streak use NORMAL runs only - test nights (experiments)
+  // would otherwise pollute the baselines and the failing-streak headline.
+  const normalReports = reports.filter((r) => r.label?.run_type !== "test");
+  const testCount = reports.length - normalReports.length;
+
   return (
     <div className="mx-auto max-w-4xl px-6 py-12">
-      <Masthead reports={reports} />
-      <VerdictStrip reports={reports} />
+      <Masthead reports={normalReports} />
+      <VerdictStrip reports={normalReports} />
 
       <section className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {DEFAULT_CARDS.map((card) => {
-          const series = numericSeries(reports, card.key);
+          const series = numericSeries(normalReports, card.key);
           const regression = regressionFor(series, card);
           return (
             <MetricCard
@@ -84,7 +89,8 @@ function Index() {
       <div className="mb-4 flex items-baseline justify-between">
         <h2 className="font-serif text-xl font-medium tracking-tight text-foreground">Reports</h2>
         <span className="text-xs text-muted-foreground">
-          {reports.length} {reports.length === 1 ? "night" : "nights"} on this device
+          {reports.length} {reports.length === 1 ? "night" : "nights"}
+          {testCount > 0 && ` · ${testCount} test excluded from trends`}
         </span>
       </div>
 

@@ -7,6 +7,16 @@ export interface SubsystemStatus {
   note?: string;
 }
 
+export type RunType = "normal" | "test";
+
+/** Classification label for a night (default: normal). Stored server-side so the
+ *  whole team sees the same test/normal tags. */
+export interface RunLabel {
+  run_type: RunType;
+  test_name?: string;
+  note?: string;
+}
+
 export interface SavedReport {
   id: string; // date key e.g. "2026-06-27"
   date: string; // ISO date
@@ -19,9 +29,35 @@ export interface SavedReport {
   source: string;
   /** true = written by the pipeline (lives on disk), not deletable from the UI. */
   fromServer?: boolean;
+  /** classification label (normal/test + name/note); defaults to normal. */
+  label?: RunLabel;
 }
 
 const KEY = "report-viewer:reports";
+
+/** Fetch all classification labels (date -> RunLabel) from the server. */
+export async function fetchLabels(): Promise<Record<string, RunLabel>> {
+  try {
+    const res = await fetch("/labels");
+    if (!res.ok) return {};
+    const data = (await res.json()) as Record<string, RunLabel>;
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Set (or clear) a night's classification label; returns the stored label. */
+export async function setLabel(date: string, label: RunLabel): Promise<RunLabel> {
+  const res = await fetch("/labels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date, ...label }),
+  });
+  if (!res.ok) throw new Error(`setLabel failed: ${res.status}`);
+  window.dispatchEvent(new Event("labels-changed"));
+  return (await res.json()) as RunLabel;
+}
 
 export function getReports(): SavedReport[] {
   if (typeof window === "undefined") return [];

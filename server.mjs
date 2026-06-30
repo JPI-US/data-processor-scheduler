@@ -17,7 +17,15 @@
 // Then open http://localhost:3000  (or http://<lan-ip>:3000).
 
 import http from "node:http";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  statSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  renameSync,
+} from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -28,6 +36,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const CLIENT_DIR = join(__dirname, "dist", "client");
+// Test/normal classification labels live in a LOCAL writable file (NOT the
+// read-only reports mount) so the web app owns them. Keyed by report date.
+const LABELS_FILE = process.env.LABELS_FILE || join(__dirname, "data", "labels.json");
 // REPORTS_DIR is env-overridable so JantaServer can point it at the LAN-mounted
 // reports folder from the Monitor PC (e.g. REPORTS_DIR=/mnt/axum-reports).
 // Defaults to the local public/reports for single-machine use.
@@ -105,9 +116,78 @@ async function ssr(req, res) {
   }
 }
 
+function readLabels() {
+  try {
+    const obj = JSON.parse(readFileSync(LABELS_FILE, "utf-8"));
+    return obj && typeof obj === "object" ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLabels(obj) {
+  mkdirSync(dirname(LABELS_FILE), { recursive: true });
+  const tmp = LABELS_FILE + ".tmp";
+  writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  renameSync(tmp, LABELS_FILE);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (c) => {
+      data += c;
+      if (data.length > 100_000) req.destroy(); // guard against runaway bodies
+    });
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const path = req.url.split("?")[0];
+
+    // 0. Classification labels API (test/normal/note), keyed by report date.
+    if (path === "/labels") {
+      if (req.method === "GET") {
+        const body = JSON.stringify(readLabels());
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(body);
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("bad json");
+          return;
+        }
+        const date = String(payload.date || "").match(/^\d{4}-\d{2}-\d{2}$/)?.[0];
+        if (!date) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("bad date");
+          return;
+        }
+        const labels = readLabels();
+        const runType = payload.run_type === "test" ? "test" : "normal";
+        const testName = payload.test_name ? String(payload.test_name).slice(0, 80) : "";
+        const note = payload.note ? String(payload.note).slice(0, 280) : "";
+        if (runType === "normal" && !note && !testName) {
+          delete labels[date]; // default normal + no note: nothing to store
+        } else {
+          labels[date] = { run_type: runType };
+          if (testName) labels[date].test_name = testName;
+          if (note) labels[date].note = note;
+        }
+        writeLabels(labels);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(labels[date] || { run_type: "normal" }));
+        return;
+      }
+    }
 
     // 1. Live reports passthrough.
     if (path.startsWith("/reports/")) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SavedReport } from "@/lib/report/storage";
-import { fetchServerReports, getReports } from "@/lib/report/storage";
+import type { RunLabel, SavedReport } from "@/lib/report/storage";
+import { fetchLabels, fetchServerReports, getReports } from "@/lib/report/storage";
 
 export interface ReportsState {
   reports: SavedReport[];
@@ -10,7 +10,16 @@ export interface ReportsState {
 export function useReports(): ReportsState {
   const [localReports, setLocalReports] = useState<SavedReport[]>([]);
   const [serverReports, setServerReports] = useState<SavedReport[]>([]);
+  const [labels, setLabels] = useState<Record<string, RunLabel>>({});
   const [loading, setLoading] = useState(true);
+
+  // Fetch classification labels (and refresh when one is changed in the UI).
+  useEffect(() => {
+    const load = () => fetchLabels().then(setLabels);
+    load();
+    window.addEventListener("labels-changed", load);
+    return () => window.removeEventListener("labels-changed", load);
+  }, []);
 
   // Keep localStorage uploads in sync.
   useEffect(() => {
@@ -57,11 +66,14 @@ export function useReports(): ReportsState {
   }, []);
 
   // Server reports win; show local-only uploads that aren't on the server.
+  // Attach each night's classification label (default normal).
   const reports = useMemo(() => {
     const serverIds = new Set(serverReports.map((r) => r.id));
     const localOnly = localReports.filter((r) => !serverIds.has(r.id));
-    return [...serverReports, ...localOnly].sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [localReports, serverReports]);
+    return [...serverReports, ...localOnly]
+      .map((r) => ({ ...r, label: labels[r.date] ?? { run_type: "normal" as const } }))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [localReports, serverReports, labels]);
 
   return { reports, loading };
 }

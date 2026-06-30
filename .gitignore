@@ -19,6 +19,7 @@ logs/
 *.log
 !*.log.example
 public/reports/
+data/
 
 plan
 
