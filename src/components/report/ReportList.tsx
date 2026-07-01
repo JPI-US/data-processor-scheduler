@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { SavedReport } from "@/lib/report/storage";
 import type { Status } from "@/lib/report/parse";
 import { subsystemsFromMetrics } from "@/lib/report/subsystems";
+import { formatLong } from "@/lib/report/format";
 import { StatusPill } from "./StatusPill";
 import { ReportSummaryDialog } from "./ReportSummaryDialog";
 
@@ -24,7 +25,7 @@ export function ReportList({ reports }: { reports: SavedReport[] }) {
                 className="grid w-full grid-cols-[7rem_1fr_auto] items-center gap-4 px-5 py-3 text-left transition-colors hover:bg-surface-2"
               >
                 <div className="font-mono text-sm tabular-nums text-muted-foreground">
-                  {formatShort(r.date)}
+                  {formatLong(r.date)}
                   {r.label?.run_type === "test" && (
                     <span
                       className="ml-1.5 rounded bg-accent/15 px-1 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-accent"
@@ -83,10 +84,4 @@ function SubsystemStrip({ report }: { report: SavedReport }) {
       ))}
     </div>
   );
-}
-
-function formatShort(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }

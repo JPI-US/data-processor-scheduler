@@ -1,25 +1,5 @@
 import { useCaptureStatus } from "@/lib/report/useCaptureStatus";
-
-/** Human "3s ago" / "4m ago" from an ISO timestamp, plus the raw age in seconds
- *  so callers can threshold on it. */
-function ago(iso?: string | null): { text: string; secs: number } | null {
-  if (!iso) return null;
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return null;
-  const secs = Math.max(0, (Date.now() - t) / 1000);
-  if (secs < 90) return { text: `${Math.round(secs)}s ago`, secs };
-  if (secs < 3600) return { text: `${Math.round(secs / 60)}m ago`, secs };
-  if (secs < 86400) return { text: `${Math.round(secs / 3600)}h ago`, secs };
-  return { text: `${Math.round(secs / 86400)}d ago`, secs };
-}
-
-function clockTime(iso?: string): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return isNaN(d.getTime())
-    ? null
-    : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
+import { ago, clockTime } from "@/lib/report/format";
 
 type Health = { tone: "pass" | "warn" | "fail" | "muted"; label: string };
 

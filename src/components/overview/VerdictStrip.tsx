@@ -1,6 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { SavedReport } from "@/lib/report/storage";
 import { calendarStrip } from "@/lib/report/trends";
+import { formatShort } from "@/lib/report/format";
 
 export function VerdictStrip({ reports, days = 30 }: { reports: SavedReport[]; days?: number }) {
   const cells = calendarStrip(reports, days);
@@ -57,11 +58,4 @@ function headlineMetric(r: SavedReport): string | null {
   if (m.mqtt_uptime_pct !== null) return `MQTT ${m.mqtt_uptime_pct.toFixed(0)}%`;
   if (m.crashes !== null) return `${m.crashes} crash${m.crashes === 1 ? "" : "es"}`;
   return null;
-}
-
-function formatShort(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  return isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

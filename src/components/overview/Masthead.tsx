@@ -1,5 +1,6 @@
 import type { SavedReport } from "@/lib/report/storage";
 import { verdictStreak, homingSummary, isStale } from "@/lib/report/trends";
+import { formatShort, formatLong, ordinal } from "@/lib/report/format";
 import { AlertTriangle } from "lucide-react";
 
 export function Masthead({ reports }: { reports: SavedReport[] }) {
@@ -100,24 +101,4 @@ function HomingChip({
       </span>
     </span>
   );
-}
-
-function ordinal(n: number): string {
-  const s = ["th", "st", "nd", "rd"];
-  const v = n % 100;
-  return n + (s[(v - 20) % 10] || s[v] || s[0]);
-}
-
-function formatShort(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  return isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function formatLong(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  return isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }

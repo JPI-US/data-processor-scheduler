@@ -12,6 +12,7 @@ import { ArrowRight, Trash2 } from "lucide-react";
 import type { SavedReport } from "@/lib/report/storage";
 import { deleteReport } from "@/lib/report/storage";
 import { subsystemsFromMetrics } from "@/lib/report/subsystems";
+import { formatFull } from "@/lib/report/format";
 import { ClassificationControl } from "./ClassificationControl";
 
 export function ReportSummaryDialog({
@@ -37,7 +38,7 @@ export function ReportSummaryDialog({
       <DialogContent className="max-w-xl gap-0 p-0 sm:max-w-xl">
         <DialogHeader className="border-b border-rule px-6 py-4">
           <div className="text-[0.7rem] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-            {formatDate(report.date)}
+            {formatFull(report.date)}
           </div>
           <DialogTitle className="font-serif text-2xl font-medium leading-tight tracking-tight">
             {report.title}
@@ -125,15 +126,4 @@ export function ReportSummaryDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
 }
