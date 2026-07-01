@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   EMPTY_VERSIONS,
+  fetchLabels,
   fetchVersions,
   setLabel,
   type RunLabel,
@@ -21,11 +22,24 @@ export function ClassificationControl({ report }: { report: SavedReport }) {
   const [version, setVersion] = useState(initial.version ?? "");
   const [note, setNote] = useState(initial.note ?? "");
   const [versions, setVersions] = useState<Versions>(EMPTY_VERSIONS);
+  const [knownTests, setKnownTests] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     fetchVersions().then(setVersions);
+    // Offer test names already used elsewhere so the same test is spelled the
+    // same way every time (and shows up as one series in the trend layer).
+    fetchLabels().then((labels) => {
+      const names = Array.from(
+        new Set(
+          Object.values(labels)
+            .filter((l) => l.run_type === "test" && l.test_name)
+            .map((l) => l.test_name as string),
+        ),
+      ).sort();
+      setKnownTests(names);
+    });
   }, []);
 
   const dirty =
@@ -76,12 +90,20 @@ export function ClassificationControl({ report }: { report: SavedReport }) {
         </div>
 
         {runType === "test" && (
-          <input
-            value={testName}
-            onChange={(e) => setTestName(e.target.value)}
-            placeholder="Test name (e.g. motors-no-wifi)"
-            className={inputCls}
-          />
+          <>
+            <input
+              list="axum-known-tests"
+              value={testName}
+              onChange={(e) => setTestName(e.target.value)}
+              placeholder="Test name — pick an existing one or type a new one"
+              className={inputCls}
+            />
+            <datalist id="axum-known-tests">
+              {knownTests.map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+          </>
         )}
 
         {runType === "normal" && (
