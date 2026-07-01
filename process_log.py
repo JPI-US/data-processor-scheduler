@@ -501,17 +501,70 @@ def _atomic_write(path, text):
     os.replace(tmp, path)
 
 
-def deliver(report_md, log_path, date=None):
+SUPERSEDED_DIR = os.path.join(REPORTS_DIR, "superseded")
+RUN_LOG = os.path.join(REPORTS_DIR, "run-log.jsonl")
+_VERDICT_RE = re.compile(r"^##\s*VERDICT:\s*(PASS|WARN|FAIL)\b", re.M | re.I)
+
+
+def validate_report(report_md):
+    """Return the verdict (PASS/WARN/FAIL) if the report is well-formed, else None.
+
+    'Well-formed' means it carries BOTH contracts the rest of the system relies
+    on: the deterministic metrics block (the UI trends off it) and a machine-
+    readable verdict line (retention keys off it). Anything missing those is a
+    half-formed/brittle report we must not publish."""
+    if "<!--axum-metrics" not in report_md:
+        return None
+    m = _VERDICT_RE.search(report_md)
+    return m.group(1).upper() if m else None
+
+
+def _append_run_log(date, log_path, verdict, superseded, digest_tokens):
+    """Append one JSON line per run - a durable audit trail answering 'what was
+    written, from which raw slice, with what verdict, and did it replace a prior
+    report?'. This is what makes report history reviewable rather than opaque."""
+    entry = {
+        "at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "date": date,
+        "verdict": verdict,
+        "source_log": os.path.basename(log_path),
+        "model": MODEL,
+        "digest_tokens": digest_tokens,
+        "superseded": os.path.basename(superseded) if superseded else None,
+    }
+    try:
+        with open(RUN_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        print("Warning: could not append run-log:", e)
+
+
+def deliver(report_md, log_path, date=None, digest_tokens=None):
     if date is None:
         date = report_date_from_log(log_path)
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
+    out = os.path.join(REPORTS_DIR, f"axum_report_{date}.md")
+
+    # No-clobber: never destroy an existing report for this date. If one already
+    # exists, move it into superseded/ with a timestamp BEFORE writing the new
+    # one. So a re-run (a manual reprocess, or a partial daytime report replaced
+    # by the full 23:00 rollover) updates the current report without ever losing
+    # history - and every replacement is auditable, not silent.
+    superseded = None
+    if os.path.exists(out):
+        os.makedirs(SUPERSEDED_DIR, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        superseded = os.path.join(SUPERSEDED_DIR, f"axum_report_{date}__{stamp}.md")
+        os.replace(out, superseded)
+        print(f"Superseded prior report -> superseded/{os.path.basename(superseded)}")
+
     # Write the report FIRST (atomically), then the manifest LAST, so the web app
     # never sees index.json list a report whose file isn't fully there yet.
-    out = os.path.join(REPORTS_DIR, f"axum_report_{date}.md")
     _atomic_write(out, report_md)
     print("Wrote", out)
 
+    # Only top-level reports go in the manifest; superseded/ is never listed.
     files = sorted(
         (os.path.basename(p) for p in glob.glob(os.path.join(REPORTS_DIR, "axum_report_*.md"))),
         reverse=True,
@@ -519,6 +572,8 @@ def deliver(report_md, log_path, date=None):
     _atomic_write(os.path.join(REPORTS_DIR, "index.json"),
                   json.dumps({"reports": files}, indent=2))
     print(f"Updated manifest: {len(files)} report(s) in index.json")
+
+    _append_run_log(date, log_path, validate_report(report_md), superseded, digest_tokens)
 
     if INGEST_URL:
         try:
@@ -557,7 +612,20 @@ def main():
     # Phase 0: prepend the deterministic metrics block so the UI trends exact
     # numbers, not the model's prose. parse.ts strips it before rendering.
     report = metrics_block(metrics) + "\n\n" + report.lstrip()
-    deliver(report, log_path, report_date)
+
+    # Integrity gate: refuse to publish a half-formed report. If the model output
+    # has no machine-readable verdict, exiting non-zero here makes
+    # report_and_retain KEEP the raw slice (its non-zero-exit path) so the day can
+    # be re-run cleanly - far better than shipping a report the UI and retention
+    # can't parse. The metrics block we prepended is always present; the verdict
+    # is the model's contribution and the thing worth guarding.
+    verdict = validate_report(report)
+    if not verdict:
+        sys.exit("Refusing to write report: model output has no "
+                 "'## VERDICT: PASS/WARN/FAIL' line. Raw log kept; re-run later.")
+
+    deliver(report, log_path, report_date, digest_tokens=len(digest) // 4)
+    print(f"Verdict: {verdict}")
 
 
 if __name__ == "__main__":
