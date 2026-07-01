@@ -4,6 +4,7 @@ import { UploadDropzone } from "@/components/report/UploadDropzone";
 import { UploadCard } from "@/components/report/UploadCard";
 import { ReportList } from "@/components/report/ReportList";
 import { Masthead } from "@/components/overview/Masthead";
+import { CaptureStatusBar } from "@/components/overview/CaptureStatusBar";
 import { VerdictStrip } from "@/components/overview/VerdictStrip";
 import { MetricCard } from "@/components/overview/MetricCard";
 import {
@@ -85,6 +86,7 @@ function Index() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-12">
+      <CaptureStatusBar />
       <OverviewControls reports={reports} versions={versions} view={view} onView={setView} />
       <Masthead reports={trendReports} />
       <VerdictStrip reports={trendReports} />

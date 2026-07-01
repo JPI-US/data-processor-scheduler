@@ -25,6 +25,7 @@ Usage:
 import os
 import sys
 import json
+import time
 import datetime
 import threading
 import subprocess
@@ -34,6 +35,12 @@ import subprocess
 # at a LAN-shared folder, and so it can be dry-run-tested without the device.
 PORT            = os.environ.get("AXUM_PORT", "COM11")
 LOG_DIR         = os.environ.get("AXUM_LOG_DIR", r"D:\scheduler\logs")
+# Capture health is published here so the web app can show 'capture live / last
+# line Ns ago / next rollover' instead of guessing from report gaps. It lives in
+# the reports dir so JantaServer reads it over the same LAN mount as the reports.
+REPORTS_DIR     = os.environ.get("AXUM_REPORTS_DIR", r"D:\scheduler\public\reports")
+STATUS_PATH     = os.path.join(REPORTS_DIR, "capture-status.json")
+STATUS_INTERVAL = 20                       # seconds between heartbeat flushes
 # The daemon hands each closed slice to report_and_retain.py (report + digest +
 # verdict-based retention). Override AXUM_REPORTER to point elsewhere / for tests.
 REPORTER        = os.environ.get("AXUM_REPORTER", r"D:\scheduler\report_and_retain.py")
@@ -66,6 +73,30 @@ def slice_path(rollover_dt):
     return os.path.join(LOG_DIR, f"capture-{rollover_dt:%Y%m%d}.log")
 
 
+def publish_status(st, state):
+    """Atomically publish capture health to REPORTS_DIR/capture-status.json.
+    Best-effort: status I/O must never disrupt capture, so all errors swallowed."""
+    try:
+        os.makedirs(REPORTS_DIR, exist_ok=True)
+        payload = {
+            "state": state,                       # capturing | reattaching | starting | stopped
+            "heartbeat_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "last_line_at": st.get("last_line_at"),
+            "current_slice": os.path.basename(st["path"]),
+            "next_rollover": st["roll"].isoformat(timespec="seconds"),
+            "lines_today": st["lines"],
+            "started_at": st.get("started_at"),
+            "pid": os.getpid(),
+        }
+        tmp = STATUS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, STATUS_PATH)
+        st["last_status"] = time.monotonic()
+    except Exception:
+        pass
+
+
 def open_slice(path):
     """Append-safe UTF-16 LE open; write a BOM only when the file is new."""
     new = (not os.path.exists(path)) or os.path.getsize(path) == 0
@@ -94,6 +125,9 @@ def main():
     st["path"] = slice_path(st["roll"])
     st["f"] = open_slice(st["path"])
     st["lines"] = 0
+    st["started_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    st["last_line_at"] = None
+    st["last_status"] = 0.0
     lock = threading.Lock()
     stop = threading.Event()
 
@@ -107,14 +141,18 @@ def main():
         st["lines"] = 0
         print(f"[daemon] rolled over -> {os.path.basename(st['path'])} "
               f"(next {st['roll']:%m-%d %H:%M})")
+        publish_status(st, "capturing")     # refresh next_rollover immediately
         kick_report(closed_path, closed_lines)
 
     def timer_loop():
-        """Force the rollover at the boundary even if the device is silent."""
+        """Force the rollover at the boundary even if the device is silent, and
+        keep the heartbeat fresh so the UI shows the daemon alive during silence."""
         while not stop.is_set():
             wait = (st["roll"] - datetime.datetime.now()).total_seconds()
             if wait > 0:
                 stop.wait(min(wait, 30))     # re-check at least every 30 s
+                with lock:
+                    publish_status(st, "capturing")
                 continue
             with lock:
                 if datetime.datetime.now() >= st["roll"]:
@@ -129,6 +167,7 @@ def main():
     print(f"  Next rollover : {st['roll']:%Y-%m-%d %H:%M}")
     print("=" * 66)
 
+    publish_status(st, "starting")
     timer = threading.Thread(target=timer_loop, daemon=True)
     timer.start()
     proc = None
@@ -160,12 +199,18 @@ def main():
                     st["f"].write(f"[{stamp}] {line}\n")
                     st["f"].flush()
                     st["lines"] += 1
+                    st["last_line_at"] = ts.isoformat(timespec="seconds")
+                    # Throttle status writes so a busy stream doesn't hammer disk.
+                    if time.monotonic() - st["last_status"] >= STATUS_INTERVAL:
+                        publish_status(st, "capturing")
                 print(line)               # echo so capture is visibly live
             proc.wait()
             if stop.is_set():
                 break
             print("[daemon] espflash exited (device reset / USB re-enumerate) "
                   "- reattaching in 3 s ...")
+            with lock:
+                publish_status(st, "reattaching")
             stop.wait(3)
     except KeyboardInterrupt:
         print("\n[daemon] CTRL+C - stopping capture.")
@@ -185,6 +230,7 @@ def main():
                     proc.kill()
                 except Exception:
                     pass
+        publish_status(st, "stopped")     # so the UI shows capture is down
         print("[daemon] stopped.")
 
 

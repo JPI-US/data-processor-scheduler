@@ -21,7 +21,11 @@ logs/
 public/reports/
 data/
 
-plan
+# Local-only working files: planning docs, codebase reviews, exports, and
+# superseded/legacy scripts. Kept on disk under _local/ but never committed.
+_local/
+# Local backups of archived/retired reports (runtime artifacts, like reports/).
+_archive/
 
 # Python bytecode
 __pycache__/
