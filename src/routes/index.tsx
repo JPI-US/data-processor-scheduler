@@ -62,7 +62,7 @@ function Index() {
   // flash the upload screen when pipeline reports are about to appear.
   if (loading) {
     return (
-      <div className="mx-auto max-w-4xl px-6 py-12">
+      <div className="mx-auto max-w-5xl px-6 py-12">
         <div className="mb-8 h-16 animate-pulse rounded-xl bg-surface" />
         <div className="mb-10 h-9 animate-pulse rounded-lg bg-surface" />
         <div className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -84,7 +84,7 @@ function Index() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-12">
+    <div className="mx-auto max-w-5xl px-6 py-12">
       <OverviewControls reports={reports} versions={versions} view={view} onView={setView} />
       <Masthead reports={trendReports} />
       <VerdictStrip reports={trendReports} />
