@@ -44,6 +44,17 @@ export interface SavedReport {
   label?: RunLabel;
 }
 
+/** One line of reports/run-log.jsonl - the pipeline's per-run audit trail. */
+export interface RunLogEntry {
+  at: string; // ISO timestamp of the run
+  date: string; // report date it produced
+  verdict: string | null; // PASS / WARN / FAIL, or null if unparseable
+  source_log: string; // raw slice the report came from
+  model?: string;
+  digest_tokens?: number | null;
+  superseded: string | null; // filename of the prior report this one replaced
+}
+
 const KEY = "report-viewer:reports";
 
 /** Fetch all classification labels (date -> RunLabel) from the server. */
@@ -189,6 +200,41 @@ export async function fetchServerReports(): Promise<SavedReport[]> {
     return results.filter((r): r is SavedReport => r !== null);
   } catch {
     return [];
+  }
+}
+
+/** Parse reports/run-log.jsonl (newline-delimited JSON). A malformed line is
+ *  skipped rather than dropping the whole log; missing/empty file -> []. */
+export async function fetchRunLog(): Promise<RunLogEntry[]> {
+  try {
+    const res = await fetch("/reports/run-log.jsonl", { cache: "no-store" });
+    if (!res.ok) return [];
+    const text = await res.text();
+    const out: RunLogEntry[] = [];
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        out.push(JSON.parse(t) as RunLogEntry);
+      } catch {
+        // skip a corrupt line
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch one archived report from superseded/ by filename and build it with the
+ *  same parser as live reports so it renders identically. */
+export async function fetchSupersededReport(fileName: string): Promise<SavedReport | null> {
+  try {
+    const res = await fetch(`/reports/superseded/${encodeURIComponent(fileName)}`);
+    if (!res.ok) return null;
+    return buildSavedReport(await res.text(), fileName, true);
+  } catch {
+    return null;
   }
 }
 

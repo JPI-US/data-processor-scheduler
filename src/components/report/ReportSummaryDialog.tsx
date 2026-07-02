@@ -14,6 +14,7 @@ import { deleteReport } from "@/lib/report/storage";
 import { subsystemsFromMetrics } from "@/lib/report/subsystems";
 import { formatFull } from "@/lib/report/format";
 import { ClassificationControl } from "./ClassificationControl";
+import { ReportHistory } from "./ReportHistory";
 
 export function ReportSummaryDialog({
   report,
@@ -95,6 +96,8 @@ export function ReportSummaryDialog({
           })()}
 
           <ClassificationControl report={report} />
+
+          <ReportHistory date={report.date} />
         </div>
 
         <DialogFooter className="flex-row items-center justify-between gap-2 border-t border-rule px-6 py-3 sm:justify-between">

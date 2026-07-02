@@ -54,6 +54,20 @@ export function ago(iso?: string | null): { text: string; secs: number } | null 
   return { text: `${Math.round(secs / 86400)}d ago`, secs };
 }
 
+/** "Jul 1, 11:01 PM" from a full ISO timestamp (local). */
+export function formatDateTime(iso?: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime())
+    ? null
+    : d.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
 /** "23:00" from a full ISO timestamp. */
 export function clockTime(iso?: string): string | null {
   if (!iso) return null;
