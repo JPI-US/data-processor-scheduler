@@ -31,6 +31,7 @@ import re
 import sys
 import glob
 import json
+import time
 import pathlib
 import datetime
 import statistics
@@ -490,15 +491,27 @@ def derive_report_date(rows, log_path):
     return report_date_from_log(log_path)
 
 
-def _atomic_write(path, text):
+def _atomic_write(path, text, retries=6, delay=0.25):
     """Write via a temp file + atomic rename so a reader (incl. the web app over
-    a LAN mount) never sees a half-written file."""
+    a LAN mount) never sees a half-written file.
+
+    On Windows/SMB, os.replace() over a destination another process has *open*
+    (a reader polling index.json, JantaServer over CIFS) raises PermissionError.
+    That's transient - readers hold the handle for milliseconds - so we retry a
+    few times before giving up rather than failing the whole delivery."""
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    for attempt in range(retries):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
 
 
 SUPERSEDED_DIR = os.path.join(REPORTS_DIR, "superseded")
@@ -564,14 +577,22 @@ def deliver(report_md, log_path, date=None, digest_tokens=None):
     _atomic_write(out, report_md)
     print("Wrote", out)
 
-    # Only top-level reports go in the manifest; superseded/ is never listed.
+    # Refresh index.json as a convenience artifact. This is now BEST-EFFORT: the
+    # web server derives the report list from the directory on each request
+    # (see server.mjs), so a failed manifest write can no longer hide a report
+    # from the UI - and must never crash delivery (which would skip the run-log
+    # and strand the raw slice, as happened on the 2026-07-02 rollover).
     files = sorted(
         (os.path.basename(p) for p in glob.glob(os.path.join(REPORTS_DIR, "axum_report_*.md"))),
         reverse=True,
     )
-    _atomic_write(os.path.join(REPORTS_DIR, "index.json"),
-                  json.dumps({"reports": files}, indent=2))
-    print(f"Updated manifest: {len(files)} report(s) in index.json")
+    try:
+        _atomic_write(os.path.join(REPORTS_DIR, "index.json"),
+                      json.dumps({"reports": files}, indent=2))
+        print(f"Updated manifest: {len(files)} report(s) in index.json")
+    except OSError as e:
+        print(f"Warning: index.json update failed ({e}); the web server derives "
+              f"the list from the directory, so the report is still visible.")
 
     _append_run_log(date, log_path, validate_report(report_md), superseded, digest_tokens)
 

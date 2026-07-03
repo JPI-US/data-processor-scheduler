@@ -22,6 +22,7 @@ import {
   existsSync,
   statSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
   mkdirSync,
   renameSync,
@@ -225,7 +226,29 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 1. Live reports passthrough.
+    // 1. Report manifest, derived LIVE from the directory. The pipeline also
+    //    writes index.json, but a stale/failed manifest write (a Windows/SMB
+    //    lock on the atomic swap, as on 2026-07-02) must never hide a report
+    //    from the UI. Reading the directory here is the single source of truth.
+    if (path === "/reports/index.json" && req.method === "GET") {
+      try {
+        const reports = readdirSync(REPORTS_DIR)
+          .filter((f) => /^axum_report_\d{4}-\d{2}-\d{2}\.md$/.test(f))
+          .sort()
+          .reverse();
+        const body = JSON.stringify({ reports });
+        res.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+        });
+        res.end(body);
+        return;
+      } catch {
+        // fall through to serve any on-disk index.json as a fallback
+      }
+    }
+
+    // 1b. Live reports passthrough (report .md, digests, run-log, status, etc.).
     if (path.startsWith("/reports/")) {
       const rel = path.slice("/reports/".length);
       const abs = safeJoin(REPORTS_DIR, rel);
