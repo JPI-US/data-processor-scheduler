@@ -128,6 +128,8 @@ would PASS.
 
 **Do not output any pre-analysis notes, working calculations, or intermediate
 workbooks.** Do all math and reasoning internally, then emit only the final report.
+**The very first characters of your reply must be the `# Axum Tower — Nightly Log
+Report` title line** — no preamble, no "I'll analyze…", nothing before it.
 
 Produce in this order:
 

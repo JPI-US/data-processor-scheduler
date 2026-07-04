@@ -394,6 +394,24 @@ def metrics_block(metrics):
     return f"<!--axum-metrics\n{json.dumps(metrics, indent=2)}\n-->"
 
 
+def _strip_to_report(md):
+    """Discard any preamble the model emits before the report proper.
+
+    The prompt forbids pre-analysis notes, but a model will occasionally 'think
+    out loud' ('I'll analyze...', 'Key observations:') before the title - which
+    pushes the title and verdict past where the web parser looks, yielding an
+    'Untitled Report' with no verdict (as on 2026-07-03). The report proper
+    starts at its H1 title, so keep from there. Fall back to the VERDICT line,
+    then the whole text, so we never drop a report that simply lacks an H1."""
+    m = re.search(r"^#[^#].*$", md, re.M)          # first level-1 heading = title
+    if m:
+        return md[m.start():].lstrip()
+    m = re.search(r"^##\s*VERDICT:", md, re.M)      # fallback: the verdict line
+    if m:
+        return md[m.start():].lstrip()
+    return md.lstrip()
+
+
 def _cap_digest(digest):
     """Last-resort safety net: if smart preprocessing still leaves a digest over
     the cap, keep the head + tail (boot/setup + end-of-day/crash) with a marker."""
@@ -629,10 +647,11 @@ def main():
         print("\n" + digest)
         return
 
-    report = call_claude(load_prompt_with_trend(), digest, metrics)
-    # Phase 0: prepend the deterministic metrics block so the UI trends exact
-    # numbers, not the model's prose. parse.ts strips it before rendering.
-    report = metrics_block(metrics) + "\n\n" + report.lstrip()
+    raw = call_claude(load_prompt_with_trend(), digest, metrics)
+    # Strip any preamble the model emitted before the report proper, then prepend
+    # the deterministic metrics block so the UI trends exact numbers, not the
+    # model's prose. parse.ts strips the metrics block before rendering.
+    report = metrics_block(metrics) + "\n\n" + _strip_to_report(raw)
 
     # Integrity gate: refuse to publish a half-formed report. If the model output
     # has no machine-readable verdict, exiting non-zero here makes
