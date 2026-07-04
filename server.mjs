@@ -41,6 +41,10 @@ const CLIENT_DIR = join(__dirname, "dist", "client");
 // read-only reports mount) so the web app owns them. Keyed by report date.
 const LABELS_FILE = process.env.LABELS_FILE || join(__dirname, "data", "labels.json");
 const VERSIONS_FILE = process.env.VERSIONS_FILE || join(__dirname, "data", "versions.json");
+// Fleet registry: a manually-maintained record of deployed towers (id, site,
+// coordinates, firmware, status, notes). Local & writable, like the labels file.
+// Purely a record - it never contacts the towers, AWS, or firmware hosting.
+const FLEET_FILE = process.env.FLEET_FILE || join(__dirname, "data", "fleet.json");
 // REPORTS_DIR is env-overridable so JantaServer can point it at the LAN-mounted
 // reports folder from the Monitor PC (e.g. REPORTS_DIR=/mnt/axum-reports).
 // Defaults to the local public/reports for single-machine use.
@@ -222,6 +226,65 @@ const server = http.createServer(async (req, res) => {
         writeJsonFile(VERSIONS_FILE, versions);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(versions));
+        return;
+      }
+    }
+
+    // 0c. Fleet registry (manual tower records), keyed by tower id. A record
+    //     only - GET the map, POST to upsert one tower, POST {id, delete:true}
+    //     to remove. No tower/AWS/firmware contact.
+    if (path === "/fleet") {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(readJsonFile(FLEET_FILE)));
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("bad json");
+          return;
+        }
+        const id = String(payload.id || "")
+          .trim()
+          .slice(0, 60);
+        if (!id) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("missing tower id");
+          return;
+        }
+        const fleet = readJsonFile(FLEET_FILE);
+        if (payload.delete) {
+          delete fleet[id];
+          writeJsonFile(FLEET_FILE, fleet);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, deleted: id }));
+          return;
+        }
+        const str = (v, n) => (v == null ? "" : String(v).slice(0, n));
+        const num = (v) => {
+          const f = parseFloat(v);
+          return Number.isFinite(f) ? f : null;
+        };
+        const STATUSES = ["deployed", "testing", "maintenance", "offline", "retired"];
+        const status = STATUSES.includes(payload.status) ? payload.status : "deployed";
+        fleet[id] = {
+          id,
+          name: str(payload.name, 80),
+          lat: num(payload.lat),
+          lng: num(payload.lng),
+          altitude: num(payload.altitude),
+          version: str(payload.version, 40),
+          status,
+          notes: str(payload.notes, 500),
+          updated_at: new Date().toISOString(),
+        };
+        writeJsonFile(FLEET_FILE, fleet);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(fleet[id]));
         return;
       }
     }

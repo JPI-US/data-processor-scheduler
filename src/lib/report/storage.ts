@@ -111,6 +111,66 @@ export function effectiveVersion(report: SavedReport, versions: Versions): strin
   return versions.deployment || "";
 }
 
+// ---- Fleet registry (manual tower records; no device/AWS/firmware contact) ----
+
+export type TowerStatus = "deployed" | "testing" | "maintenance" | "offline" | "retired";
+
+export interface Tower {
+  id: string; // e.g. "tower_5"
+  name?: string; // site / friendly name
+  lat?: number | null;
+  lng?: number | null;
+  altitude?: number | null;
+  version?: string; // firmware you believe is running (typed by hand)
+  status?: TowerStatus;
+  notes?: string;
+  updated_at?: string;
+}
+
+/** Fetch the fleet registry (map of tower id -> record). */
+export async function fetchFleet(): Promise<Record<string, Tower>> {
+  try {
+    const res = await fetch("/fleet", { cache: "no-store" });
+    if (!res.ok) return {};
+    const data = (await res.json()) as Record<string, Tower>;
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Upsert one tower record; returns the stored tower (or null on failure). */
+export async function saveTower(tower: Tower): Promise<Tower | null> {
+  try {
+    const res = await fetch("/fleet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tower),
+    });
+    if (!res.ok) return null;
+    window.dispatchEvent(new Event("fleet-changed"));
+    return (await res.json()) as Tower;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove a tower record by id. */
+export async function deleteTower(id: string): Promise<boolean> {
+  try {
+    const res = await fetch("/fleet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, delete: true }),
+    });
+    if (!res.ok) return false;
+    window.dispatchEvent(new Event("fleet-changed"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getReports(): SavedReport[] {
   if (typeof window === "undefined") return [];
   try {

@@ -12,6 +12,7 @@ import {
   DEFAULT_VIEW,
   type OverviewView,
 } from "@/components/overview/OverviewControls";
+import { FleetPanel } from "@/components/fleet/FleetPanel";
 import { useReports } from "@/lib/report/useReports";
 import { effectiveVersion, saveReport } from "@/lib/report/storage";
 import { DEFAULT_CARDS } from "@/lib/report/metrics";
@@ -86,6 +87,7 @@ function Index() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-12">
+      <FleetPanel />
       <CaptureStatusBar />
       <OverviewControls reports={reports} versions={versions} view={view} onView={setView} />
       <Masthead reports={trendReports} />
