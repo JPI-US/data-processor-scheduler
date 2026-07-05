@@ -75,7 +75,13 @@ def slice_path(rollover_dt):
 
 def publish_status(st, state):
     """Atomically publish capture health to REPORTS_DIR/capture-status.json.
-    Best-effort: status I/O must never disrupt capture, so all errors swallowed."""
+
+    Best-effort and throttle-advancing: bump last_status up front so a contended
+    write is retried at most once per STATUS_INTERVAL, never once per captured
+    line. That per-line retry - each attempt sleeping on a reader-locked file -
+    is what made capture crawl. Status freshness is always sacrificed to keep
+    capture fast, never the other way around."""
+    st["last_status"] = time.monotonic()
     try:
         os.makedirs(REPORTS_DIR, exist_ok=True)
         payload = {
@@ -91,19 +97,17 @@ def publish_status(st, state):
         tmp = STATUS_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        # Retry the swap: the web app polls capture-status.json constantly (local
-        # + JantaServer over SMB), so a reader often holds it open and os.replace
-        # raises PermissionError on Windows. Without retry the heartbeat silently
-        # goes stale while capture is actually fine. Retry briefly, then give up.
-        for attempt in range(5):
+        # Bounded retry for a reader-locked file (Windows/SMB, worse when C: is
+        # full and I/O is slow). Short enough that even while holding the capture
+        # lock it can't drag the log down - and it only runs once per interval now.
+        for attempt in range(3):
             try:
                 os.replace(tmp, STATUS_PATH)
                 break
             except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.15)
-        st["last_status"] = time.monotonic()
+                if attempt == 2:
+                    break
+                time.sleep(0.1)
     except Exception:
         pass
 
