@@ -124,6 +124,7 @@ export interface Tower {
   version?: string; // firmware you believe is running (typed by hand)
   status?: TowerStatus;
   notes?: string;
+  drive_url?: string; // Google Drive dossier folder (auto-created server-side)
   updated_at?: string;
 }
 
@@ -168,6 +169,36 @@ export async function deleteTower(id: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Ask the server to (re)create this tower's Drive folder via the Apps Script
+ *  hook. Preserves the rest of the record; returns the updated tower. */
+export async function createTowerFolder(id: string): Promise<Tower | null> {
+  try {
+    const res = await fetch("/fleet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, create_folder: true }),
+    });
+    if (!res.ok) return null;
+    window.dispatchEvent(new Event("fleet-changed"));
+    return (await res.json()) as Tower;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the server has the Drive hook configured (so the UI only offers
+ *  "Create Drive folder" when it will actually work). */
+export async function fetchFleetConfig(): Promise<{ drive_enabled: boolean }> {
+  try {
+    const res = await fetch("/fleet/config", { cache: "no-store" });
+    if (!res.ok) return { drive_enabled: false };
+    const data = (await res.json()) as { drive_enabled?: boolean };
+    return { drive_enabled: !!data.drive_enabled };
+  } catch {
+    return { drive_enabled: false };
   }
 }
 

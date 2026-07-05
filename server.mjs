@@ -45,6 +45,13 @@ const VERSIONS_FILE = process.env.VERSIONS_FILE || join(__dirname, "data", "vers
 // coordinates, firmware, status, notes). Local & writable, like the labels file.
 // Purely a record - it never contacts the towers, AWS, or firmware hosting.
 const FLEET_FILE = process.env.FLEET_FILE || join(__dirname, "data", "fleet.json");
+// Optional Google Drive folder automation: when a tower is added, POST its id +
+// secret to a Google Apps Script web app that finds-or-creates a folder named the
+// tower id under the shared parent folder and returns its URL. Dormant until both
+// env vars are set; the secret stays server-side (never sent to the browser).
+const DRIVE_HOOK_URL = process.env.DRIVE_HOOK_URL || "";
+const DRIVE_HOOK_SECRET = process.env.DRIVE_HOOK_SECRET || "";
+const DRIVE_ENABLED = Boolean(DRIVE_HOOK_URL && DRIVE_HOOK_SECRET);
 // REPORTS_DIR is env-overridable so JantaServer can point it at the LAN-mounted
 // reports folder from the Monitor PC (e.g. REPORTS_DIR=/mnt/axum-reports).
 // Defaults to the local public/reports for single-machine use.
@@ -154,6 +161,31 @@ function readBody(req) {
   });
 }
 
+/** Ensure a tower has a Drive dossier folder. Best-effort: if the hook isn't
+ *  configured or the call fails, the tower is returned unchanged (and still
+ *  saves). The Apps Script is idempotent, so this is safe to call repeatedly. */
+async function ensureDriveFolder(tower) {
+  if (!DRIVE_ENABLED || tower.drive_url) return tower;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(DRIVE_HOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: tower.id, secret: DRIVE_HOOK_SECRET }),
+      signal: ctrl.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data && data.url) tower.drive_url = String(data.url);
+    else console.error("[fleet] drive hook: no url in response", data && data.error);
+  } catch (e) {
+    console.error("[fleet] drive hook failed:", e.message);
+  } finally {
+    clearTimeout(timer);
+  }
+  return tower;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const path = req.url.split("?")[0];
@@ -230,9 +262,17 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 0c. Fleet registry (manual tower records), keyed by tower id. A record
-    //     only - GET the map, POST to upsert one tower, POST {id, delete:true}
-    //     to remove. No tower/AWS/firmware contact.
+    // 0c-cfg. Whether the Drive folder hook is configured (lets the UI show the
+    //         "Create Drive folder" action only when it will actually work).
+    if (path === "/fleet/config" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ drive_enabled: DRIVE_ENABLED }));
+      return;
+    }
+
+    // 0c. Fleet registry (manual tower records), keyed by tower id. GET the map,
+    //     POST to upsert a tower / {id,delete:true} to remove / {id,create_folder:
+    //     true} to (re)make its Drive folder. Only Drive (optional) is contacted.
     if (path === "/fleet") {
       if (req.method === "GET") {
         res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -258,10 +298,25 @@ const server = http.createServer(async (req, res) => {
         }
         const fleet = readJsonFile(FLEET_FILE);
         if (payload.delete) {
-          delete fleet[id];
+          delete fleet[id]; // note: leaves the Drive folder + contents intact
           writeJsonFile(FLEET_FILE, fleet);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: true, deleted: id }));
+          return;
+        }
+        // Retry/backfill folder creation for an existing tower without touching
+        // its other fields.
+        if (payload.create_folder) {
+          const tower = fleet[id];
+          if (!tower) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("unknown tower");
+            return;
+          }
+          await ensureDriveFolder(tower);
+          writeJsonFile(FLEET_FILE, fleet);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(tower));
           return;
         }
         const str = (v, n) => (v == null ? "" : String(v).slice(0, n));
@@ -271,6 +326,7 @@ const server = http.createServer(async (req, res) => {
         };
         const STATUSES = ["deployed", "testing", "maintenance", "offline", "retired"];
         const status = STATUSES.includes(payload.status) ? payload.status : "deployed";
+        const prev = fleet[id] || {};
         fleet[id] = {
           id,
           name: str(payload.name, 80),
@@ -280,8 +336,12 @@ const server = http.createServer(async (req, res) => {
           version: str(payload.version, 40),
           status,
           notes: str(payload.notes, 500),
+          drive_url: prev.drive_url || "", // preserved across edits, never wiped
           updated_at: new Date().toISOString(),
         };
+        // Auto-create the Drive folder on add (best-effort; no-op if the hook is
+        // unset or the tower already has a folder).
+        await ensureDriveFolder(fleet[id]);
         writeJsonFile(FLEET_FILE, fleet);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(fleet[id]));

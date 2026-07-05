@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { X, Plus, Trash2 } from "lucide-react";
+import { X, Plus, Trash2, FolderOpen, FolderPlus } from "lucide-react";
 import {
   fetchFleet,
+  fetchFleetConfig,
   saveTower,
   deleteTower,
+  createTowerFolder,
   type Tower,
   type TowerStatus,
 } from "@/lib/report/storage";
@@ -28,10 +30,12 @@ export function FleetPanel() {
   const [fleet, setFleet] = useState<Record<string, Tower>>({});
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [driveEnabled, setDriveEnabled] = useState(false);
 
   useEffect(() => {
     const load = () => fetchFleet().then(setFleet);
     load();
+    fetchFleetConfig().then((c) => setDriveEnabled(c.drive_enabled));
     window.addEventListener("fleet-changed", load);
     return () => window.removeEventListener("fleet-changed", load);
   }, []);
@@ -108,6 +112,7 @@ export function FleetPanel() {
                     key={t.id}
                     initial={t}
                     existingIds={towers.map((x) => x.id)}
+                    driveEnabled={driveEnabled}
                     onDone={() => setEditingId(null)}
                   />
                 ) : (
@@ -166,11 +171,13 @@ function TowerForm({
   initial,
   isNew = false,
   existingIds,
+  driveEnabled = false,
   onDone,
 }: {
   initial: Tower;
   isNew?: boolean;
   existingIds: string[];
+  driveEnabled?: boolean;
   onDone: () => void;
 }) {
   const [id, setId] = useState(initial.id ?? "");
@@ -184,6 +191,15 @@ function TowerForm({
   const [status, setStatus] = useState<TowerStatus>(initial.status ?? "deployed");
   const [notes, setNotes] = useState(initial.notes ?? "");
   const [busy, setBusy] = useState(false);
+  const [folderBusy, setFolderBusy] = useState(false);
+
+  const makeFolder = async () => {
+    setFolderBusy(true);
+    await createTowerFolder(initial.id);
+    setFolderBusy(false);
+    // fleet-changed fires -> the panel reloads and this form re-renders with the
+    // new initial.drive_url, flipping the button to "Open Drive folder".
+  };
 
   const idClash = isNew && existingIds.includes(id.trim());
   const canSave = id.trim().length > 0 && !idClash && !busy;
@@ -289,6 +305,34 @@ function TowerForm({
         rows={2}
         className={`${inputCls} resize-none`}
       />
+
+      {/* Google Drive dossier: open it if it exists, else offer to create it
+          (only when the server has the hook configured). Hidden for a brand-new
+          unsaved tower — its folder is auto-created on first save. */}
+      {!isNew && (initial.drive_url || driveEnabled) && (
+        <div className="rounded-md border border-rule bg-background px-2.5 py-2">
+          {initial.drive_url ? (
+            <a
+              href={initial.drive_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground hover:underline"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Open Drive folder
+            </a>
+          ) : (
+            <button
+              onClick={makeFolder}
+              disabled={folderBusy}
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+              {folderBusy ? "Creating folder…" : "Create Drive folder"}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-2 pt-1">
         {!isNew ? (
