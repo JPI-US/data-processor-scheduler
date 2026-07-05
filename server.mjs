@@ -52,6 +52,12 @@ const FLEET_FILE = process.env.FLEET_FILE || join(__dirname, "data", "fleet.json
 const DRIVE_HOOK_URL = process.env.DRIVE_HOOK_URL || "";
 const DRIVE_HOOK_SECRET = process.env.DRIVE_HOOK_SECRET || "";
 const DRIVE_ENABLED = Boolean(DRIVE_HOOK_URL && DRIVE_HOOK_SECRET);
+// Optional firmware git-tag lookup: the UI offers real tags from the (private)
+// firmware repo when picking a tower's flashed/current version. The token stays
+// server-side; the browser calls /firmware/tags. Dormant until both are set.
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+const FIRMWARE_REPO = process.env.FIRMWARE_REPO || ""; // e.g. "JPI-US/Janta_Power"
+const FIRMWARE_ENABLED = Boolean(GITHUB_TOKEN && FIRMWARE_REPO);
 // REPORTS_DIR is env-overridable so JantaServer can point it at the LAN-mounted
 // reports folder from the Monitor PC (e.g. REPORTS_DIR=/mnt/axum-reports).
 // Defaults to the local public/reports for single-machine use.
@@ -186,6 +192,39 @@ async function ensureDriveFolder(tower) {
   return tower;
 }
 
+// Firmware git tags, cached ~10 min so we don't hammer the GitHub API. The token
+// never leaves the server; the browser only sees the resulting tag names.
+let _tagCache = { at: 0, tags: [] };
+async function firmwareTags() {
+  if (!FIRMWARE_ENABLED) return [];
+  if (Date.now() - _tagCache.at < 10 * 60 * 1000) return _tagCache.tags;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${FIRMWARE_REPO}/tags?per_page=100`, {
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "axum-fleet",
+      },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      console.error("[firmware] tags fetch failed:", res.status);
+      return _tagCache.tags; // serve stale on failure rather than nothing
+    }
+    const data = await res.json();
+    const tags = Array.isArray(data) ? data.map((t) => String(t.name)) : [];
+    _tagCache = { at: Date.now(), tags };
+    return tags;
+  } catch (e) {
+    console.error("[firmware] tags fetch error:", e.message);
+    return _tagCache.tags;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const path = req.url.split("?")[0];
@@ -270,6 +309,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 0d. Firmware git tags for the version pickers (proxied so the token stays
+    //     server-side). enabled=false + empty list when unconfigured.
+    if (path === "/firmware/tags" && req.method === "GET") {
+      const tags = await firmwareTags();
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ enabled: FIRMWARE_ENABLED, repo: FIRMWARE_REPO, tags }));
+      return;
+    }
+
     // 0c. Fleet registry (manual tower records), keyed by tower id. GET the map,
     //     POST to upsert a tower / {id,delete:true} to remove / {id,create_folder:
     //     true} to (re)make its Drive folder. Only Drive (optional) is contacted.
@@ -333,7 +381,8 @@ const server = http.createServer(async (req, res) => {
           lat: num(payload.lat),
           lng: num(payload.lng),
           altitude: num(payload.altitude),
-          version: str(payload.version, 40),
+          version: str(payload.version, 60), // current firmware
+          flashed_version: str(payload.flashed_version, 60), // originally flashed
           status,
           notes: str(payload.notes, 500),
           drive_url: prev.drive_url || "", // preserved across edits, never wiped

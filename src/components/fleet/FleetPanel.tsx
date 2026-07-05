@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Plus, Trash2, FolderOpen, FolderPlus, Pencil } from "lucide-react";
+import { X, Plus, Trash2, FolderOpen, FolderPlus, Pencil, Copy, MapPin } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -10,12 +10,26 @@ import {
 import {
   fetchFleet,
   fetchFleetConfig,
+  fetchFirmwareTags,
   saveTower,
   deleteTower,
   createTowerFolder,
   type Tower,
   type TowerStatus,
 } from "@/lib/report/storage";
+import { formatDateTime } from "@/lib/report/format";
+
+interface Firmware {
+  enabled: boolean;
+  repo: string;
+  tags: string[];
+}
+const EMPTY_FIRMWARE: Firmware = { enabled: false, repo: "", tags: [] };
+
+/** Link to a tag on GitHub, or plain text if we don't have the repo. */
+function tagUrl(repo: string, tag: string): string | null {
+  return repo && tag ? `https://github.com/${repo}/tree/${encodeURIComponent(tag)}` : null;
+}
 
 const inputCls =
   "w-full rounded-md border border-rule bg-surface px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring";
@@ -37,13 +51,15 @@ export function FleetPanel() {
   const [open, setOpen] = useState(false);
   const [fleet, setFleet] = useState<Record<string, Tower>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [addSeed, setAddSeed] = useState<Tower | null>(null);
   const [driveEnabled, setDriveEnabled] = useState(false);
+  const [firmware, setFirmware] = useState<Firmware>(EMPTY_FIRMWARE);
 
   useEffect(() => {
     const load = () => fetchFleet().then(setFleet);
     load();
     fetchFleetConfig().then((c) => setDriveEnabled(c.drive_enabled));
+    fetchFirmwareTags().then(setFirmware);
     window.addEventListener("fleet-changed", load);
     return () => window.removeEventListener("fleet-changed", load);
   }, []);
@@ -52,6 +68,12 @@ export function FleetPanel() {
     a.id.localeCompare(b.id, undefined, { numeric: true }),
   );
   const existingIds = towers.map((t) => t.id);
+
+  // Duplicate: seed a new-tower dialog with everything but the id + Drive folder.
+  const duplicate = (t: Tower) => {
+    setSelectedId(null);
+    setAddSeed({ ...t, id: "", drive_url: undefined, updated_at: undefined });
+  };
 
   return (
     <>
@@ -91,7 +113,7 @@ export function FleetPanel() {
             <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
               <button
                 onClick={() => {
-                  setAdding(true);
+                  setAddSeed({ id: "", status: "deployed" });
                   setSelectedId(null);
                 }}
                 className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rule py-2 text-xs font-medium text-muted-foreground hover:bg-surface hover:text-foreground"
@@ -120,18 +142,21 @@ export function FleetPanel() {
           tower={fleet[selectedId]}
           existingIds={existingIds}
           driveEnabled={driveEnabled}
+          firmware={firmware}
+          onDuplicate={duplicate}
           onClose={() => setSelectedId(null)}
         />
       )}
 
-      {/* Add a new tower — opens straight in edit mode. */}
-      {adding && (
+      {/* Add a new tower (or a duplicate) — opens straight in edit mode. */}
+      {addSeed && (
         <TowerDialog
-          tower={{ id: "", status: "deployed" }}
+          tower={addSeed}
           isNew
           existingIds={existingIds}
           driveEnabled={driveEnabled}
-          onClose={() => setAdding(false)}
+          firmware={firmware}
+          onClose={() => setAddSeed(null)}
         />
       )}
     </>
@@ -178,12 +203,16 @@ function TowerDialog({
   isNew = false,
   existingIds,
   driveEnabled,
+  firmware,
+  onDuplicate,
   onClose,
 }: {
   tower: Tower;
   isNew?: boolean;
   existingIds: string[];
   driveEnabled: boolean;
+  firmware: Firmware;
+  onDuplicate?: (t: Tower) => void;
   onClose: () => void;
 }) {
   const [editing, setEditing] = useState(isNew);
@@ -211,11 +240,18 @@ function TowerDialog({
             initial={tower}
             isNew={isNew}
             existingIds={existingIds}
+            firmware={firmware}
             onDone={() => (isNew ? onClose() : setEditing(false))}
             onRemoved={onClose}
           />
         ) : (
-          <TowerDetail tower={tower} driveEnabled={driveEnabled} onEdit={() => setEditing(true)} />
+          <TowerDetail
+            tower={tower}
+            driveEnabled={driveEnabled}
+            firmware={firmware}
+            onEdit={() => setEditing(true)}
+            onDuplicate={onDuplicate}
+          />
         )}
       </DialogContent>
     </Dialog>
@@ -241,14 +277,35 @@ function DetailRow({
   );
 }
 
+function VersionValue({ repo, tag }: { repo: string; tag?: string }) {
+  if (!tag) return <>—</>;
+  const url = tagUrl(repo, tag);
+  return url ? (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="font-mono text-foreground underline decoration-rule underline-offset-2 hover:decoration-foreground"
+    >
+      {tag}
+    </a>
+  ) : (
+    <span className="font-mono">{tag}</span>
+  );
+}
+
 function TowerDetail({
   tower,
   driveEnabled,
+  firmware,
   onEdit,
+  onDuplicate,
 }: {
   tower: Tower;
   driveEnabled: boolean;
+  firmware: Firmware;
   onEdit: () => void;
+  onDuplicate?: (t: Tower) => void;
 }) {
   const [folderBusy, setFolderBusy] = useState(false);
   const makeFolder = async () => {
@@ -256,16 +313,52 @@ function TowerDetail({
     await createTowerFolder(tower.id);
     setFolderBusy(false);
   };
-  const coords = tower.lat != null && tower.lng != null ? `${tower.lat}, ${tower.lng}` : null;
+  const hasCoords = tower.lat != null && tower.lng != null;
 
   return (
     <>
       <div className="px-5 py-2">
         <DetailRow label="Site / name" value={tower.name} />
-        <DetailRow label="Coordinates" value={coords} mono />
+        <div className="flex items-start justify-between gap-4 border-b border-rule py-2">
+          <span className="shrink-0 text-xs text-muted-foreground">Coordinates</span>
+          <span className="text-right text-sm">
+            {hasCoords ? (
+              <a
+                href={`https://www.google.com/maps?q=${tower.lat},${tower.lng}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-mono text-foreground underline decoration-rule underline-offset-2 hover:decoration-foreground"
+              >
+                <MapPin className="h-3 w-3" />
+                {tower.lat}, {tower.lng}
+              </a>
+            ) : (
+              "—"
+            )}
+          </span>
+        </div>
         <DetailRow label="Altitude" value={tower.altitude != null ? `${tower.altitude} m` : null} />
-        <DetailRow label="Firmware" value={tower.version} mono />
+        <div className="flex items-start justify-between gap-4 border-b border-rule py-2">
+          <span className="shrink-0 text-xs text-muted-foreground">Flashed firmware</span>
+          <span className="text-right text-sm">
+            <VersionValue repo={firmware.repo} tag={tower.flashed_version} />
+          </span>
+        </div>
+        <div className="flex items-start justify-between gap-4 border-b border-rule py-2">
+          <span className="shrink-0 text-xs text-muted-foreground">Current firmware</span>
+          <span className="text-right text-sm">
+            <VersionValue repo={firmware.repo} tag={tower.version} />
+          </span>
+        </div>
         <DetailRow label="Notes" value={tower.notes} />
+        {tower.updated_at && (
+          <div className="flex items-start justify-between gap-4 py-2">
+            <span className="shrink-0 text-xs text-muted-foreground">Last updated</span>
+            <span className="text-right text-xs text-muted-foreground">
+              {formatDateTime(tower.updated_at) ?? tower.updated_at}
+            </span>
+          </div>
+        )}
       </div>
 
       {(tower.drive_url || driveEnabled) && (
@@ -293,7 +386,18 @@ function TowerDetail({
         </div>
       )}
 
-      <div className="flex justify-end border-t border-rule px-5 py-3">
+      <div className="flex items-center justify-between gap-2 border-t border-rule px-5 py-3">
+        {onDuplicate ? (
+          <button
+            onClick={() => onDuplicate(tower)}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            Duplicate
+          </button>
+        ) : (
+          <span />
+        )}
         <button
           onClick={onEdit}
           className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background hover:bg-foreground/90"
@@ -310,12 +414,14 @@ function TowerForm({
   initial,
   isNew = false,
   existingIds,
+  firmware,
   onDone,
   onRemoved,
 }: {
   initial: Tower;
   isNew?: boolean;
   existingIds: string[];
+  firmware: Firmware;
   onDone: () => void;
   onRemoved: () => void;
 }) {
@@ -327,6 +433,7 @@ function TowerForm({
     initial.altitude != null ? String(initial.altitude) : "",
   );
   const [version, setVersion] = useState(initial.version ?? "");
+  const [flashedVersion, setFlashedVersion] = useState(initial.flashed_version ?? "");
   const [status, setStatus] = useState<TowerStatus>(initial.status ?? "deployed");
   const [notes, setNotes] = useState(initial.notes ?? "");
   const [busy, setBusy] = useState(false);
@@ -351,6 +458,7 @@ function TowerForm({
       lng: numOrNull(lng),
       altitude: numOrNull(altitude),
       version: version.trim(),
+      flashed_version: flashedVersion.trim(),
       status,
       notes: notes.trim(),
     });
@@ -413,25 +521,50 @@ function TowerForm({
         />
       </div>
 
+      {/* Firmware: pick a real git tag (or type a value, e.g. a describe string). */}
+      <datalist id="fw-tags">
+        {firmware.tags.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
       <div className="grid grid-cols-2 gap-2">
-        <input
-          value={version}
-          onChange={(e) => setVersion(e.target.value)}
-          placeholder="Firmware (e.g. 1.1.4)"
-          className={`${inputCls} font-mono`}
-        />
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value as TowerStatus)}
-          className={inputCls}
-        >
-          {STATUS_KEYS.map((k) => (
-            <option key={k} value={k}>
-              {STATUS[k].label}
-            </option>
-          ))}
-        </select>
+        <label className="space-y-1">
+          <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">
+            Flashed
+          </span>
+          <input
+            list="fw-tags"
+            value={flashedVersion}
+            onChange={(e) => setFlashedVersion(e.target.value)}
+            placeholder={firmware.enabled ? "pick a tag" : "e.g. v1.1.3"}
+            className={`${inputCls} font-mono`}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">
+            Current
+          </span>
+          <input
+            list="fw-tags"
+            value={version}
+            onChange={(e) => setVersion(e.target.value)}
+            placeholder={firmware.enabled ? "pick a tag" : "e.g. v1.1.4"}
+            className={`${inputCls} font-mono`}
+          />
+        </label>
       </div>
+
+      <select
+        value={status}
+        onChange={(e) => setStatus(e.target.value as TowerStatus)}
+        className={inputCls}
+      >
+        {STATUS_KEYS.map((k) => (
+          <option key={k} value={k}>
+            {STATUS[k].label}
+          </option>
+        ))}
+      </select>
 
       <textarea
         value={notes}

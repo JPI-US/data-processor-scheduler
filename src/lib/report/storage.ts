@@ -121,11 +121,33 @@ export interface Tower {
   lat?: number | null;
   lng?: number | null;
   altitude?: number | null;
-  version?: string; // firmware you believe is running (typed by hand)
+  version?: string; // current firmware (git tag / describe)
+  flashed_version?: string; // firmware originally flashed at install (git tag)
   status?: TowerStatus;
   notes?: string;
   drive_url?: string; // Google Drive dossier folder (auto-created server-side)
   updated_at?: string;
+}
+
+/** Firmware git tags for the version pickers; enabled=false when the server has
+ *  no GitHub token configured (fields fall back to free text). */
+export async function fetchFirmwareTags(): Promise<{
+  enabled: boolean;
+  repo: string;
+  tags: string[];
+}> {
+  try {
+    const res = await fetch("/firmware/tags", { cache: "no-store" });
+    if (!res.ok) return { enabled: false, repo: "", tags: [] };
+    const d = (await res.json()) as { enabled?: boolean; repo?: string; tags?: string[] };
+    return {
+      enabled: !!d.enabled,
+      repo: d.repo ?? "",
+      tags: Array.isArray(d.tags) ? d.tags : [],
+    };
+  } catch {
+    return { enabled: false, repo: "", tags: [] };
+  }
 }
 
 /** Fetch the fleet registry (map of tower id -> record). */
