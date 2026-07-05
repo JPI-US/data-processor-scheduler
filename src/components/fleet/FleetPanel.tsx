@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { X, Plus, Trash2, FolderOpen, FolderPlus } from "lucide-react";
+import { X, Plus, Trash2, FolderOpen, FolderPlus, Pencil } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import {
   fetchFleet,
   fetchFleetConfig,
@@ -24,12 +31,13 @@ const STATUS_KEYS = Object.keys(STATUS) as TowerStatus[];
 
 /** A manually-maintained record of deployed towers — a notebook in the app. It
  *  never contacts the towers, AWS, or firmware hosting; it only stores and shows
- *  what you type. Lives in the JantaServer-local fleet.json. */
+ *  what you type. Clicking a tower opens a read-only dialog; editing is behind an
+ *  explicit Edit button so nobody changes a record by accident. */
 export function FleetPanel() {
   const [open, setOpen] = useState(false);
   const [fleet, setFleet] = useState<Record<string, Tower>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [driveEnabled, setDriveEnabled] = useState(false);
 
   useEffect(() => {
@@ -43,6 +51,7 @@ export function FleetPanel() {
   const towers = Object.values(fleet).sort((a, b) =>
     a.id.localeCompare(b.id, undefined, { numeric: true }),
   );
+  const existingIds = towers.map((t) => t.id);
 
   return (
     <>
@@ -80,61 +89,56 @@ export function FleetPanel() {
             </header>
 
             <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
-              {adding ? (
-                <TowerForm
-                  isNew
-                  initial={{ id: "", status: "deployed" }}
-                  existingIds={towers.map((t) => t.id)}
-                  onDone={() => setAdding(false)}
-                />
-              ) : (
-                <button
-                  onClick={() => {
-                    setAdding(true);
-                    setEditingId(null);
-                  }}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rule py-2 text-xs font-medium text-muted-foreground hover:bg-surface hover:text-foreground"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add tower
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  setAdding(true);
+                  setSelectedId(null);
+                }}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rule py-2 text-xs font-medium text-muted-foreground hover:bg-surface hover:text-foreground"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add tower
+              </button>
 
-              {towers.length === 0 && !adding && (
+              {towers.length === 0 && (
                 <p className="pt-6 text-center text-sm text-muted-foreground">
                   No towers recorded yet.
                 </p>
               )}
 
-              {towers.map((t) =>
-                editingId === t.id ? (
-                  <TowerForm
-                    key={t.id}
-                    initial={t}
-                    existingIds={towers.map((x) => x.id)}
-                    driveEnabled={driveEnabled}
-                    onDone={() => setEditingId(null)}
-                  />
-                ) : (
-                  <TowerRow
-                    key={t.id}
-                    tower={t}
-                    onEdit={() => {
-                      setEditingId(t.id);
-                      setAdding(false);
-                    }}
-                  />
-                ),
-              )}
+              {towers.map((t) => (
+                <TowerRow key={t.id} tower={t} onOpen={() => setSelectedId(t.id)} />
+              ))}
             </div>
           </aside>
         </div>
+      )}
+
+      {/* Read-only detail dialog (view existing tower); Edit unlocks the fields. */}
+      {selectedId && fleet[selectedId] && (
+        <TowerDialog
+          tower={fleet[selectedId]}
+          existingIds={existingIds}
+          driveEnabled={driveEnabled}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
+
+      {/* Add a new tower — opens straight in edit mode. */}
+      {adding && (
+        <TowerDialog
+          tower={{ id: "", status: "deployed" }}
+          isNew
+          existingIds={existingIds}
+          driveEnabled={driveEnabled}
+          onClose={() => setAdding(false)}
+        />
       )}
     </>
   );
 }
 
-function TowerRow({ tower, onEdit }: { tower: Tower; onEdit: () => void }) {
+function TowerRow({ tower, onOpen }: { tower: Tower; onOpen: () => void }) {
   const s = STATUS[tower.status ?? "deployed"];
   const coords =
     tower.lat != null && tower.lng != null
@@ -142,7 +146,7 @@ function TowerRow({ tower, onEdit }: { tower: Tower; onEdit: () => void }) {
       : null;
   return (
     <button
-      onClick={onEdit}
+      onClick={onOpen}
       className="w-full rounded-lg border border-rule bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
     >
       <div className="flex items-center justify-between gap-2">
@@ -167,18 +171,153 @@ function TowerRow({ tower, onEdit }: { tower: Tower; onEdit: () => void }) {
   );
 }
 
+/** Dialog shell that shows a tower read-only, with an Edit button that swaps in
+ *  the editable form. New towers open straight in edit mode. */
+function TowerDialog({
+  tower,
+  isNew = false,
+  existingIds,
+  driveEnabled,
+  onClose,
+}: {
+  tower: Tower;
+  isNew?: boolean;
+  existingIds: string[];
+  driveEnabled: boolean;
+  onClose: () => void;
+}) {
+  const [editing, setEditing] = useState(isNew);
+  const s = STATUS[tower.status ?? "deployed"];
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-rule px-5 py-3 pr-10 text-left">
+          <div className="flex items-center justify-between gap-2">
+            <DialogTitle className="font-mono text-base">
+              {isNew ? "Add tower" : tower.id}
+            </DialogTitle>
+            {!isNew && (
+              <span className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium ${s.cls}`}>
+                {s.label}
+              </span>
+            )}
+          </div>
+          <DialogDescription className="sr-only">Tower record details</DialogDescription>
+        </DialogHeader>
+
+        {editing ? (
+          <TowerForm
+            initial={tower}
+            isNew={isNew}
+            existingIds={existingIds}
+            onDone={() => (isNew ? onClose() : setEditing(false))}
+            onRemoved={onClose}
+          />
+        ) : (
+          <TowerDetail tower={tower} driveEnabled={driveEnabled} onEdit={() => setEditing(true)} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value?: string | null;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-rule py-2 last:border-0">
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
+      <span className={`text-right text-sm text-foreground ${mono ? "font-mono" : ""}`}>
+        {value ? value : "—"}
+      </span>
+    </div>
+  );
+}
+
+function TowerDetail({
+  tower,
+  driveEnabled,
+  onEdit,
+}: {
+  tower: Tower;
+  driveEnabled: boolean;
+  onEdit: () => void;
+}) {
+  const [folderBusy, setFolderBusy] = useState(false);
+  const makeFolder = async () => {
+    setFolderBusy(true);
+    await createTowerFolder(tower.id);
+    setFolderBusy(false);
+  };
+  const coords = tower.lat != null && tower.lng != null ? `${tower.lat}, ${tower.lng}` : null;
+
+  return (
+    <>
+      <div className="px-5 py-2">
+        <DetailRow label="Site / name" value={tower.name} />
+        <DetailRow label="Coordinates" value={coords} mono />
+        <DetailRow label="Altitude" value={tower.altitude != null ? `${tower.altitude} m` : null} />
+        <DetailRow label="Firmware" value={tower.version} mono />
+        <DetailRow label="Notes" value={tower.notes} />
+      </div>
+
+      {(tower.drive_url || driveEnabled) && (
+        <div className="px-5 pb-3">
+          {tower.drive_url ? (
+            <a
+              href={tower.drive_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-rule px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-surface-2"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Open Drive folder
+            </a>
+          ) : (
+            <button
+              onClick={makeFolder}
+              disabled={folderBusy}
+              className="inline-flex items-center gap-1.5 rounded-md border border-rule px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+              {folderBusy ? "Creating folder…" : "Create Drive folder"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex justify-end border-t border-rule px-5 py-3">
+        <button
+          onClick={onEdit}
+          className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background hover:bg-foreground/90"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          Edit
+        </button>
+      </div>
+    </>
+  );
+}
+
 function TowerForm({
   initial,
   isNew = false,
   existingIds,
-  driveEnabled = false,
   onDone,
+  onRemoved,
 }: {
   initial: Tower;
   isNew?: boolean;
   existingIds: string[];
-  driveEnabled?: boolean;
   onDone: () => void;
+  onRemoved: () => void;
 }) {
   const [id, setId] = useState(initial.id ?? "");
   const [name, setName] = useState(initial.name ?? "");
@@ -191,15 +330,6 @@ function TowerForm({
   const [status, setStatus] = useState<TowerStatus>(initial.status ?? "deployed");
   const [notes, setNotes] = useState(initial.notes ?? "");
   const [busy, setBusy] = useState(false);
-  const [folderBusy, setFolderBusy] = useState(false);
-
-  const makeFolder = async () => {
-    setFolderBusy(true);
-    await createTowerFolder(initial.id);
-    setFolderBusy(false);
-    // fleet-changed fires -> the panel reloads and this form re-renders with the
-    // new initial.drive_url, flipping the button to "Open Drive folder".
-  };
 
   const idClash = isNew && existingIds.includes(id.trim());
   const canSave = id.trim().length > 0 && !idClash && !busy;
@@ -233,19 +363,24 @@ function TowerForm({
     setBusy(true);
     const ok = await deleteTower(id);
     setBusy(false);
-    if (ok) onDone();
+    if (ok) onRemoved();
   };
 
   return (
-    <div className="space-y-2 rounded-lg border border-accent/40 bg-surface p-3">
-      <input
-        value={id}
-        onChange={(e) => setId(e.target.value)}
-        placeholder="Tower ID (e.g. tower_5)"
-        disabled={!isNew}
-        className={`${inputCls} font-mono disabled:opacity-60`}
-      />
-      {idClash && <p className="text-[0.7rem] text-[var(--color-fail)]">That id already exists.</p>}
+    <div className="space-y-2 px-5 py-4">
+      {isNew && (
+        <>
+          <input
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+            placeholder="Tower ID (e.g. tower_5)"
+            className={`${inputCls} font-mono`}
+          />
+          {idClash && (
+            <p className="text-[0.7rem] text-[var(--color-fail)]">That id already exists.</p>
+          )}
+        </>
+      )}
 
       <input
         value={name}
@@ -305,34 +440,6 @@ function TowerForm({
         rows={2}
         className={`${inputCls} resize-none`}
       />
-
-      {/* Google Drive dossier: open it if it exists, else offer to create it
-          (only when the server has the hook configured). Hidden for a brand-new
-          unsaved tower — its folder is auto-created on first save. */}
-      {!isNew && (initial.drive_url || driveEnabled) && (
-        <div className="rounded-md border border-rule bg-background px-2.5 py-2">
-          {initial.drive_url ? (
-            <a
-              href={initial.drive_url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground hover:underline"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-              Open Drive folder
-            </a>
-          ) : (
-            <button
-              onClick={makeFolder}
-              disabled={folderBusy}
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              <FolderPlus className="h-3.5 w-3.5" />
-              {folderBusy ? "Creating folder…" : "Create Drive folder"}
-            </button>
-          )}
-        </div>
-      )}
 
       <div className="flex items-center justify-between gap-2 pt-1">
         {!isNew ? (
