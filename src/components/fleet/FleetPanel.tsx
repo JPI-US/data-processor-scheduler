@@ -77,6 +77,7 @@ export function FleetPanel() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignSite, setAssignSite] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [groupBy, setGroupBy] = useState<"site" | "number">("site");
 
   useEffect(() => {
     const load = () => fetchFleet().then(setFleet);
@@ -108,10 +109,13 @@ export function FleetPanel() {
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key)!.push(t);
   }
-  // Named sites first (alphabetical), the "Ungrouped" bucket last.
-  const groupKeys = [...grouped.keys()].sort((a, b) =>
-    a === "" ? 1 : b === "" ? -1 : a.localeCompare(b),
-  );
+  // Order groups by their lowest tower number (towers are already numeric-sorted,
+  // so [0] is each group's smallest), with the "Ungrouped" bucket last.
+  const groupKeys = [...grouped.keys()].sort((a, b) => {
+    if (a === "") return 1;
+    if (b === "") return -1;
+    return grouped.get(a)![0].id.localeCompare(grouped.get(b)![0].id, undefined, { numeric: true });
+  });
 
   const saveSite = (t: Tower, site: string) => saveTower({ ...t, site });
   const autoGroup = async () => {
@@ -217,6 +221,25 @@ export function FleetPanel() {
                       Auto-group {towers.length} towers by name
                     </button>
                   )}
+                  {sites.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
+                      <span>Sort</span>
+                      <div className="inline-flex overflow-hidden rounded-md border border-rule">
+                        <button
+                          onClick={() => setGroupBy("site")}
+                          className={`px-2 py-0.5 font-medium ${groupBy === "site" ? "bg-foreground text-background" : "hover:bg-surface-2"}`}
+                        >
+                          By site
+                        </button>
+                        <button
+                          onClick={() => setGroupBy("number")}
+                          className={`px-2 py-0.5 font-medium ${groupBy === "number" ? "bg-foreground text-background" : "hover:bg-surface-2"}`}
+                        >
+                          By #
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="flex items-center justify-between rounded-lg bg-surface px-3 py-2 text-xs">
@@ -287,7 +310,7 @@ export function FleetPanel() {
                     </button>
                   </div>
                 </>
-              ) : sites.length === 0 ? (
+              ) : groupBy === "number" || sites.length === 0 ? (
                 towers.map((t) => (
                   <TowerRow key={t.id} tower={t} onOpen={() => setSelectedId(t.id)} />
                 ))

@@ -1,5 +1,21 @@
 import { useEffect, useState } from "react";
-import { setVersions, type SavedReport, type Versions } from "@/lib/report/storage";
+import { ExternalLink } from "lucide-react";
+import {
+  setVersions,
+  fetchFirmwareTags,
+  type SavedReport,
+  type Versions,
+} from "@/lib/report/storage";
+
+/** GitHub link for a registry version, but only if that tag actually exists in
+ *  the firmware repo (matched loosely on a leading "v"). null = show no link. */
+function tagLink(repo: string, tags: string[], value: string): string | null {
+  const v = (value ?? "").trim();
+  if (!repo || !v) return null;
+  const norm = (s: string) => s.replace(/^v/i, "");
+  const found = tags.find((t) => t === v || norm(t) === norm(v));
+  return found ? `https://github.com/${repo}/tree/${encodeURIComponent(found)}` : null;
+}
 
 /** Which slice of nights the trend layer (strip / cards / streak) shows. */
 export interface OverviewView {
@@ -32,6 +48,12 @@ export function OverviewControls({
 }) {
   const [draft, setDraft] = useState<Versions>(versions);
   useEffect(() => setDraft(versions), [versions]);
+
+  // Firmware repo + tags, so a saved registry version can link to its GitHub tag.
+  const [fw, setFw] = useState<{ repo: string; tags: string[] }>({ repo: "", tags: [] });
+  useEffect(() => {
+    fetchFirmwareTags().then((f) => setFw({ repo: f.repo, tags: f.tags }));
+  }, []);
 
   const saveVersions = () => {
     if (
@@ -72,6 +94,20 @@ export function OverviewControls({
               placeholder="—"
               className="w-16 rounded border border-rule bg-background px-1.5 py-0.5 font-mono text-foreground"
             />
+            {(() => {
+              const url = tagLink(fw.repo, fw.tags, versions[t.key]);
+              return url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={`Open ${versions[t.key]} on GitHub`}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : null;
+            })()}
           </label>
         ))}
       </div>
