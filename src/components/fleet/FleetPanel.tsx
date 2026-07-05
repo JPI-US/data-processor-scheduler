@@ -1,5 +1,18 @@
 import { useEffect, useState } from "react";
-import { X, Plus, Trash2, FolderOpen, FolderPlus, Pencil, Copy, MapPin } from "lucide-react";
+import {
+  X,
+  Plus,
+  Trash2,
+  FolderOpen,
+  FolderPlus,
+  Pencil,
+  Copy,
+  MapPin,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  Sparkles,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +44,12 @@ function tagUrl(repo: string, tag: string): string | null {
   return repo && tag ? `https://github.com/${repo}/tree/${encodeURIComponent(tag)}` : null;
 }
 
+/** Guess a site from a tower name by dropping a trailing "#3" / " 3".
+ *  "Saddler #1" -> "Saddler", "FIFA Dallas #2" -> "FIFA Dallas". */
+function siteSuggestion(name: string): string {
+  return name.replace(/\s*#?\d+\s*$/, "").trim();
+}
+
 const inputCls =
   "w-full rounded-md border border-rule bg-surface px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 
@@ -54,6 +73,10 @@ export function FleetPanel() {
   const [addSeed, setAddSeed] = useState<Tower | null>(null);
   const [driveEnabled, setDriveEnabled] = useState(false);
   const [firmware, setFirmware] = useState<Firmware>(EMPTY_FIRMWARE);
+  const [grouping, setGrouping] = useState(false); // bulk "assign a site" mode
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [assignSite, setAssignSite] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const load = () => fetchFleet().then(setFleet);
@@ -74,6 +97,56 @@ export function FleetPanel() {
     setSelectedId(null);
     setAddSeed({ ...t, id: "", drive_url: undefined, updated_at: undefined });
   };
+
+  // --- grouping by site ---
+  const sites = Array.from(new Set(towers.map((t) => (t.site ?? "").trim()).filter(Boolean))).sort(
+    (a, b) => a.localeCompare(b),
+  );
+  const grouped = new Map<string, Tower[]>();
+  for (const t of towers) {
+    const key = (t.site ?? "").trim();
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(t);
+  }
+  // Named sites first (alphabetical), the "Ungrouped" bucket last.
+  const groupKeys = [...grouped.keys()].sort((a, b) =>
+    a === "" ? 1 : b === "" ? -1 : a.localeCompare(b),
+  );
+
+  const saveSite = (t: Tower, site: string) => saveTower({ ...t, site });
+  const autoGroup = async () => {
+    for (const t of towers) {
+      if (!(t.site ?? "").trim()) {
+        const s = siteSuggestion(t.name ?? "");
+        if (s) await saveSite(t, s);
+      }
+    }
+  };
+  const applyGroup = async () => {
+    const site = assignSite.trim();
+    if (!site) return;
+    for (const id of selected) {
+      const t = fleet[id];
+      if (t) await saveSite(t, site);
+    }
+    setSelected(new Set());
+    setAssignSite("");
+    setGrouping(false);
+  };
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleCollapse = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   return (
     <>
@@ -111,16 +184,55 @@ export function FleetPanel() {
             </header>
 
             <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
-              <button
-                onClick={() => {
-                  setAddSeed({ id: "", status: "deployed" });
-                  setSelectedId(null);
-                }}
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rule py-2 text-xs font-medium text-muted-foreground hover:bg-surface hover:text-foreground"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add tower
-              </button>
+              {/* Toolbar */}
+              {!grouping ? (
+                <>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setAddSeed({ id: "", status: "deployed" });
+                        setSelectedId(null);
+                      }}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-dashed border-rule py-2 text-xs font-medium text-muted-foreground hover:bg-surface hover:text-foreground"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add tower
+                    </button>
+                    {towers.length > 1 && (
+                      <button
+                        onClick={() => setGrouping(true)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-rule px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-surface hover:text-foreground"
+                      >
+                        <Layers className="h-3.5 w-3.5" />
+                        Group
+                      </button>
+                    )}
+                  </div>
+                  {sites.length === 0 && towers.length > 1 && (
+                    <button
+                      onClick={autoGroup}
+                      className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface px-3 py-2 text-xs font-medium text-foreground hover:bg-surface-2"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Auto-group {towers.length} towers by name
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center justify-between rounded-lg bg-surface px-3 py-2 text-xs">
+                  <span className="text-muted-foreground">Select towers, then assign a site</span>
+                  <button
+                    onClick={() => {
+                      setGrouping(false);
+                      setSelected(new Set());
+                      setAssignSite("");
+                    }}
+                    className="font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
 
               {towers.length === 0 && (
                 <p className="pt-6 text-center text-sm text-muted-foreground">
@@ -128,9 +240,83 @@ export function FleetPanel() {
                 </p>
               )}
 
-              {towers.map((t) => (
-                <TowerRow key={t.id} tower={t} onOpen={() => setSelectedId(t.id)} />
-              ))}
+              {/* List: select-mode checklist, grouped view, or a flat list. */}
+              {grouping ? (
+                <>
+                  {towers.map((t) => (
+                    <label
+                      key={t.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-rule bg-surface px-3 py-2.5 hover:bg-surface-2"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.has(t.id)}
+                        onChange={() => toggleSelect(t.id)}
+                        className="h-4 w-4 accent-[var(--color-accent)]"
+                      />
+                      <span className="font-mono text-sm text-foreground">{t.id}</span>
+                      {t.name && (
+                        <span className="truncate text-xs text-muted-foreground">{t.name}</span>
+                      )}
+                      {t.site && (
+                        <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[0.6rem] text-muted-foreground">
+                          {t.site}
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                  <div className="sticky bottom-0 -mx-4 flex items-center gap-2 border-t border-rule bg-background px-4 py-3">
+                    <datalist id="fleet-sites">
+                      {sites.map((s) => (
+                        <option key={s} value={s} />
+                      ))}
+                    </datalist>
+                    <input
+                      list="fleet-sites"
+                      value={assignSite}
+                      onChange={(e) => setAssignSite(e.target.value)}
+                      placeholder="Site name (pick or type)"
+                      className={inputCls}
+                    />
+                    <button
+                      onClick={applyGroup}
+                      disabled={selected.size === 0 || !assignSite.trim()}
+                      className="shrink-0 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground disabled:opacity-40"
+                    >
+                      Assign{selected.size ? ` ${selected.size}` : ""}
+                    </button>
+                  </div>
+                </>
+              ) : sites.length === 0 ? (
+                towers.map((t) => (
+                  <TowerRow key={t.id} tower={t} onOpen={() => setSelectedId(t.id)} />
+                ))
+              ) : (
+                groupKeys.map((key) => (
+                  <div key={key || "__ungrouped__"} className="space-y-2">
+                    <button
+                      onClick={() => toggleCollapse(key)}
+                      className="flex w-full items-center gap-1.5 pt-1 text-[0.7rem] font-semibold uppercase tracking-[0.15em] text-muted-foreground hover:text-foreground"
+                    >
+                      {collapsed.has(key) ? (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      )}
+                      {key || "Ungrouped"}
+                      <span className="rounded bg-muted px-1 text-[0.6rem] tabular-nums text-muted-foreground">
+                        {grouped.get(key)!.length}
+                      </span>
+                    </button>
+                    {!collapsed.has(key) &&
+                      grouped
+                        .get(key)!
+                        .map((t) => (
+                          <TowerRow key={t.id} tower={t} onOpen={() => setSelectedId(t.id)} />
+                        ))}
+                  </div>
+                ))
+              )}
             </div>
           </aside>
         </div>
@@ -143,6 +329,7 @@ export function FleetPanel() {
           existingIds={existingIds}
           driveEnabled={driveEnabled}
           firmware={firmware}
+          sites={sites}
           onDuplicate={duplicate}
           onClose={() => setSelectedId(null)}
         />
@@ -156,6 +343,7 @@ export function FleetPanel() {
           existingIds={existingIds}
           driveEnabled={driveEnabled}
           firmware={firmware}
+          sites={sites}
           onClose={() => setAddSeed(null)}
         />
       )}
@@ -204,6 +392,7 @@ function TowerDialog({
   existingIds,
   driveEnabled,
   firmware,
+  sites,
   onDuplicate,
   onClose,
 }: {
@@ -212,6 +401,7 @@ function TowerDialog({
   existingIds: string[];
   driveEnabled: boolean;
   firmware: Firmware;
+  sites: string[];
   onDuplicate?: (t: Tower) => void;
   onClose: () => void;
 }) {
@@ -241,6 +431,7 @@ function TowerDialog({
             isNew={isNew}
             existingIds={existingIds}
             firmware={firmware}
+            sites={sites}
             onDone={() => (isNew ? onClose() : setEditing(false))}
             onRemoved={onClose}
           />
@@ -318,7 +509,8 @@ function TowerDetail({
   return (
     <>
       <div className="px-5 py-2">
-        <DetailRow label="Site / name" value={tower.name} />
+        <DetailRow label="Name" value={tower.name} />
+        <DetailRow label="Site" value={tower.site} />
         <div className="flex items-start justify-between gap-4 border-b border-rule py-2">
           <span className="shrink-0 text-xs text-muted-foreground">Coordinates</span>
           <span className="text-right text-sm">
@@ -415,6 +607,7 @@ function TowerForm({
   isNew = false,
   existingIds,
   firmware,
+  sites,
   onDone,
   onRemoved,
 }: {
@@ -422,11 +615,13 @@ function TowerForm({
   isNew?: boolean;
   existingIds: string[];
   firmware: Firmware;
+  sites: string[];
   onDone: () => void;
   onRemoved: () => void;
 }) {
   const [id, setId] = useState(initial.id ?? "");
   const [name, setName] = useState(initial.name ?? "");
+  const [site, setSite] = useState(initial.site ?? "");
   const [lat, setLat] = useState(initial.lat != null ? String(initial.lat) : "");
   const [lng, setLng] = useState(initial.lng != null ? String(initial.lng) : "");
   const [altitude, setAltitude] = useState(
@@ -454,6 +649,7 @@ function TowerForm({
     const saved = await saveTower({
       id: id.trim(),
       name: name.trim(),
+      site: site.trim(),
       lat: numOrNull(lat),
       lng: numOrNull(lng),
       altitude: numOrNull(altitude),
@@ -493,7 +689,20 @@ function TowerForm({
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Site / name"
+        placeholder="Name (e.g. Saddler #1)"
+        className={inputCls}
+      />
+
+      <datalist id="form-sites">
+        {sites.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
+      <input
+        list="form-sites"
+        value={site}
+        onChange={(e) => setSite(e.target.value)}
+        placeholder="Site — groups towers (e.g. Saddler)"
         className={inputCls}
       />
 

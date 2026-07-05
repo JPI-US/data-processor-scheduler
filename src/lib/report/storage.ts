@@ -117,7 +117,8 @@ export type TowerStatus = "deployed" | "testing" | "maintenance" | "offline" | "
 
 export interface Tower {
   id: string; // e.g. "tower_5"
-  name?: string; // site / friendly name
+  name?: string; // friendly name (e.g. "Saddler #1")
+  site?: string; // grouping key (e.g. "Saddler")
   lat?: number | null;
   lng?: number | null;
   altitude?: number | null;

@@ -378,6 +378,7 @@ const server = http.createServer(async (req, res) => {
         fleet[id] = {
           id,
           name: str(payload.name, 80),
+          site: str(payload.site, 80), // grouping key (e.g. "Saddler")
           lat: num(payload.lat),
           lng: num(payload.lng),
           altitude: num(payload.altitude),
