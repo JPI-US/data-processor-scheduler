@@ -91,7 +91,18 @@ def publish_status(st, state):
         tmp = STATUS_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        os.replace(tmp, STATUS_PATH)
+        # Retry the swap: the web app polls capture-status.json constantly (local
+        # + JantaServer over SMB), so a reader often holds it open and os.replace
+        # raises PermissionError on Windows. Without retry the heartbeat silently
+        # goes stale while capture is actually fine. Retry briefly, then give up.
+        for attempt in range(5):
+            try:
+                os.replace(tmp, STATUS_PATH)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.15)
         st["last_status"] = time.monotonic()
     except Exception:
         pass
