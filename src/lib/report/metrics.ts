@@ -23,6 +23,10 @@ export interface AxumMetrics {
   mqtt_connects: number | null;
   mqtt_disconnects: number | null;
   mqtt_uptime_pct: number | null;
+  /** Publish attempts vs. confirmed sends, and the reconnect-cascade count — the
+   *  decisive MQTT health signals for carried-over sessions with no connect event. */
+  mqtt_publish_attempts: number | null;
+  mqtt_reconnect_failures: number | null;
   dns_failures: number | null;
   dns_failures_per_hour: number | null;
   mqtt_publishes_confirmed: number | null;
@@ -30,6 +34,8 @@ export interface AxumMetrics {
   nvs_ok: boolean | null;
   homing_startup_ok: boolean | null;
   homing_sleep_ok: boolean | null;
+  /** True when the day ran continuously with no reboot (a healthy, not abnormal, state). */
+  session_continuous: boolean | null;
 }
 
 const NUM_KEYS: (keyof AxumMetrics)[] = [
@@ -44,13 +50,20 @@ const NUM_KEYS: (keyof AxumMetrics)[] = [
   "mqtt_connects",
   "mqtt_disconnects",
   "mqtt_uptime_pct",
+  "mqtt_publish_attempts",
+  "mqtt_reconnect_failures",
   "dns_failures",
   "dns_failures_per_hour",
   "mqtt_publishes_confirmed",
 ];
 
 const STR_KEYS: (keyof AxumMetrics)[] = ["session_date", "firmware", "encoder_mode"];
-const BOOL_KEYS: (keyof AxumMetrics)[] = ["nvs_ok", "homing_startup_ok", "homing_sleep_ok"];
+const BOOL_KEYS: (keyof AxumMetrics)[] = [
+  "nvs_ok",
+  "homing_startup_ok",
+  "homing_sleep_ok",
+  "session_continuous",
+];
 
 let warnedNewerSchema = false;
 
@@ -83,6 +96,8 @@ export function extractMetrics(markdown: string): AxumMetrics | null {
     mqtt_connects: null,
     mqtt_disconnects: null,
     mqtt_uptime_pct: null,
+    mqtt_publish_attempts: null,
+    mqtt_reconnect_failures: null,
     dns_failures: null,
     dns_failures_per_hour: null,
     mqtt_publishes_confirmed: null,
@@ -90,6 +105,7 @@ export function extractMetrics(markdown: string): AxumMetrics | null {
     nvs_ok: null,
     homing_startup_ok: null,
     homing_sleep_ok: null,
+    session_continuous: null,
   };
 
   const sink = out as unknown as Record<string, unknown>;

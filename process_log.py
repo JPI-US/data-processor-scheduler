@@ -235,6 +235,10 @@ METRICS_SCHEMA = 1
 TS_FMT = "%Y-%m-%d %H:%M:%S"
 
 FW_RE   = re.compile(r"App version:\s*(\S+)")
+# Fallbacks for a carried-over session that never re-emits the boot 'App version:'
+# banner — the running firmware is still stamped on every tracking loop and OTA check.
+FW_LOOP_RE = re.compile(r"Tracking loop duration \(v?([\d.]+)\)")
+FW_OTA_RE  = re.compile(r"current firmware version:?\s*v?([\d.]+)")
 MODE_RE = re.compile(r'Motion mode:\s*"([^"]+)"')
 
 
@@ -265,8 +269,13 @@ def compute_metrics(rows, log_path, report_date=None):
     nvs_ok = True
     expect_reason = False
 
-    mqtt_state, mqtt_connect_dt, mqtt_connected_s = "down", None, 0.0
+    # MQTT modeled as a time-based up/down machine (default UP): we only accrue
+    # DOWN time across a real failure cascade, so a healthy carried-over session
+    # (which never logs a boot-time "MQTT Connected") reads as up, not never-connected.
+    mqtt_state, mqtt_down_start, mqtt_down_s = "up", None, 0.0
     mqtt_connects = mqtt_disconnects = 0
+    mqtt_attempts = mqtt_reconnect_fail = 0
+    encoder_degraded = False
 
     sleep_phase = False
     startup_attempt = sleep_attempt = False
@@ -279,11 +288,17 @@ def compute_metrics(rows, log_path, report_date=None):
             mfw = FW_RE.search(b)
             if mfw:
                 firmware = mfw.group(1)
+            else:
+                mfb = FW_LOOP_RE.search(b) or FW_OTA_RE.search(b)
+                if mfb:
+                    firmware = "v" + mfb.group(1)
         mmode = MODE_RE.search(b)
         if mmode:
             encoder_mode = mmode.group(1)
         if "switching to StepperOnly" in b:
             encoder_mode = "StepperOnly"
+        if re.search(r"Encoder fault|probes exhausted|Encoder disabled", b):
+            encoder_degraded = True
 
         if "Calling app_main()" in b:
             boots += 1
@@ -312,18 +327,28 @@ def compute_metrics(rows, log_path, report_date=None):
         # connectivity
         if "getaddrinfo() returns" in b:
             dns += 1
+        if "Attempting to publish" in b:
+            mqtt_attempts += 1
         if "published successfully" in b:
             publishes += 1
+        if "Retrying momentarilly" in b:
+            mqtt_reconnect_fail += 1
         if "MQTT Connected" in b:
-            if mqtt_state == "down":
-                mqtt_connects += 1
-                mqtt_state, mqtt_connect_dt = "up", dt
-        elif "MQTT Disconnected" in b:
-            if mqtt_state == "up":
-                mqtt_disconnects += 1
-                if mqtt_connect_dt and dt:
-                    mqtt_connected_s += (dt - mqtt_connect_dt).total_seconds()
-                mqtt_state, mqtt_connect_dt = "down", None
+            mqtt_connects += 1
+
+        # Up/down machine: a drop (disconnect or transport error) opens a down
+        # window; the next proof of life (a successful publish or a fresh connect)
+        # closes it. Multiple drops while already down are one window; likewise a
+        # storm of publishes while up is a no-op.
+        dropped = ("MQTT Disconnected" in b) or ("Error transport connect" in b)
+        recovered = ("published successfully" in b) or ("MQTT Connected" in b)
+        if dropped and mqtt_state == "up" and dt:
+            mqtt_disconnects += 1
+            mqtt_state, mqtt_down_start = "down", dt
+        elif recovered and mqtt_state == "down":
+            if mqtt_down_start and dt:
+                mqtt_down_s += (dt - mqtt_down_start).total_seconds()
+            mqtt_state, mqtt_down_start = "up", None
 
         # persistence
         if re.search(r"nvs.*(error|fail|invalid|disabled)", b, re.I) and "enabled" not in b:
@@ -333,7 +358,10 @@ def compute_metrics(rows, log_path, report_date=None):
         if "Moving to sleep position" in b:
             sleep_phase = True
         attempt = "Looking for the limit switch" in b
-        success = ("Homing OK" in b) or ("found home" in b)
+        # "forced encoder zero" is the sunrise already-at-home path: the limit switch
+        # was active and the encoder zeroed — a valid home confirmation that a
+        # carried-over session takes instead of a full "Homing OK" search.
+        success = ("Homing OK" in b) or ("found home" in b) or ("forced encoder zero" in b)
         if not sleep_phase:
             startup_attempt = startup_attempt or attempt
             if success:
@@ -343,8 +371,8 @@ def compute_metrics(rows, log_path, report_date=None):
             if success:
                 homing_sleep_ok = True
 
-    if mqtt_state == "up" and mqtt_connect_dt and last_dt:
-        mqtt_connected_s += (last_dt - mqtt_connect_dt).total_seconds()
+    if mqtt_state == "down" and mqtt_down_start and last_dt:
+        mqtt_down_s += (last_dt - mqtt_down_start).total_seconds()
     if startup_attempt and homing_startup_ok is None:
         homing_startup_ok = False
     if sleep_attempt and homing_sleep_ok is None:
@@ -352,16 +380,32 @@ def compute_metrics(rows, log_path, report_date=None):
 
     moves = _build_moves(rows)
     base = _baseline_ratio(moves)
-    started = sum(1 for _, b in rows if ON in b)
+    # started = completed ON..OFF cycles; a trailing in-progress move (ON with no
+    # OFF at the slice boundary) isn't scored, so it can't ding completion %.
+    started = len(moves)
     completed = sum(1 for mv in moves if mv["outcome"] == "Completed")
     flagged = sum(1 for mv in moves if _move_flags(mv, base))
 
+    # Carried-over sessions never re-emit the boot 'Motion mode:' line, so
+    # encoder_mode would be null even on a healthy day. Infer it from all-day
+    # behavior: live encoder telemetry (moves with real encoder travel) and no
+    # fault/fallback trail == the guarded mode was maintained.
+    encoder_seen = any(
+        len(mv["ticks"]) >= 2 and (mv["ticks"][-1][0] - mv["ticks"][0][0]) != 0
+        for mv in moves
+    )
+    if encoder_mode is None and encoder_seen and not encoder_degraded:
+        encoder_mode = "EncoderGuarded"
+
     hours = session_min / 60 if session_min else 0
+    session_continuous = boots == 0 and session_min > 240
 
     # null guards (the locked contract): only emit a rate when it's meaningful.
     motion_pct = round(100 * completed / started, 1) if started >= 5 else None
-    uptime_pct = (round(100 * mqtt_connected_s / (session_min * 60), 1)
-                  if session_min >= 30 and mqtt_connects >= 1 else None)
+    mqtt_active = bool(mqtt_attempts or publishes or mqtt_connects or mqtt_reconnect_fail)
+    session_s = session_min * 60
+    uptime_pct = (round(100 * max(0.0, session_s - mqtt_down_s) / session_s, 1)
+                  if session_min >= 30 and mqtt_active else None)
     dns_per_hr = round(dns / hours, 1) if session_min >= 15 and hours else None
 
     return {
@@ -380,6 +424,8 @@ def compute_metrics(rows, log_path, report_date=None):
         "mqtt_connects": mqtt_connects,
         "mqtt_disconnects": mqtt_disconnects,
         "mqtt_uptime_pct": uptime_pct,
+        "mqtt_publish_attempts": mqtt_attempts,
+        "mqtt_reconnect_failures": mqtt_reconnect_fail,
         "dns_failures": dns,
         "dns_failures_per_hour": dns_per_hr,
         "mqtt_publishes_confirmed": publishes,
@@ -387,6 +433,7 @@ def compute_metrics(rows, log_path, report_date=None):
         "nvs_ok": nvs_ok,
         "homing_startup_ok": homing_startup_ok,
         "homing_sleep_ok": homing_sleep_ok,
+        "session_continuous": session_continuous,
     }
 
 
@@ -430,6 +477,35 @@ def build_digest(path):
               + "\n\n"
               + classify_and_rollup(rows))
     return rows, _cap_digest(digest)
+
+
+def audit_unknowns(rows):
+    """List every non-tick line the classifier does NOT explicitly recognize,
+    grouped by normalized form with counts. This is the 'everything accounted for'
+    check: recurring unknowns are candidates to promote into signatures.py, and a
+    quiet audit means the vocabulary is complete. Novel one-offs are never hidden
+    anyway (they stay verbatim in the digest) - this just makes the gaps visible."""
+    import signatures as sig
+    buckets = {}
+    for ts, b in rows:
+        if not b.strip() or TICK.search(b) or ON in b or OFF.search(b):
+            continue
+        cat, _ = sig.classify(b)
+        if cat is not None:
+            continue
+        key = sig.normalize(b)
+        e = buckets.get(key)
+        if e is None:
+            buckets[key] = [1, sig.message(b)]
+        else:
+            e[0] += 1
+    out = ["=== UNCLASSIFIED LINES (normalized form: count, example) ==="]
+    for key in sorted(buckets, key=lambda k: -buckets[k][0]):
+        n, ex = buckets[key]
+        out.append(f"  {n:>6}x  {ex[:90]}")
+    if len(out) == 1:
+        out.append("  (none - every non-tick line matched a signature)")
+    return "\n".join(out)
 
 
 def _trend_context(prev_path):
@@ -641,6 +717,10 @@ def main():
     metrics = compute_metrics(rows, log_path, report_date)
     print(f"  {len(rows):,} raw lines -> digest ~{len(digest)//4:,} tokens "
           f"({digest.count(chr(10)):,} lines) -> report date {report_date}")
+
+    if "--audit" in sys.argv:
+        print("\n" + audit_unknowns(rows))
+        return
 
     if "--digest-only" in sys.argv:
         print("\n" + metrics_block(metrics))

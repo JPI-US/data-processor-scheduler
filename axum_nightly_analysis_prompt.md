@@ -74,16 +74,23 @@ that pattern repeated N times.
    The tower is in Houston, TX (lat 29.75, lon −95.35, CST/CDT); sunrise ~6:15am CDT,
    sunset ~8:20pm CDT in June.
 
-5. **Connectivity.** Report:
-   - **MQTT connected events** (`MQTT Connected`) and **disconnected events**
-     (`MQTT Disconnected`) — count each.
-   - **DNS failures** — count `getaddrinfo() returns 202` lines, multiplying by N for
-     any `[block xN]` containing them. This is the dominant connectivity failure mode.
-   - **Successful publishes** (`MQTT Publish Message {id} confirmed`) — total count.
+5. **Connectivity.** Judge MQTT by whether it *published*, not by boot-time connect
+   lines. Report from the ground-truth metrics:
+   - **MQTT uptime %** (`mqtt_uptime_pct`) — the headline. Time-based: the fraction of
+     the session the link was up, counting a failure cascade as down until the next
+     successful publish. Interpret when/why it dropped; don't recompute it.
+   - **Publish activity** — `mqtt_publish_attempts` vs `mqtt_publishes_confirmed`
+     (attempted vs. sent). A healthy day has these roughly equal and non-zero.
+   - **Reconnect failures** (`mqtt_reconnect_failures`) — the decisive failure signal.
+     Zero is healthy; hundreds+ means a sustained outage even if a few publishes slipped
+     through.
+   - **DNS failures** (`dns_failures`) — `getaddrinfo() returns 202`; the dominant
+     failure mode when connectivity breaks.
    - **Wi-Fi reconnect failures** — `ESP_ERR_TIMEOUT` on `connect()`.
-   - **MQTT uptime %** — provided in the ground-truth metrics; interpret it (e.g. when
-     and why the connection dropped), don't recompute it.
-   - If MQTT was never connected even once, state that explicitly.
+   - **Carried-over sessions** (`session_continuous: true`) inherit a live MQTT link and
+     never re-emit `MQTT Connected` — so `mqtt_connects: 0` with confirmed publishes is
+     **healthy, not a failure**. Judge by uptime + reconnect failures, never by the
+     absence of a connect event.
 
 6. **Persistence.** Confirm NVS writes succeed (`Stored stable heading in NVS`,
    `Stored encoder snapshot in NVS`) and flag any `NVS persist disabled` or
@@ -99,8 +106,9 @@ Assign one overall verdict (worst matching tier wins):
   - Motion completion rate < 90%
   - `AbortedStall` or `AbortedOvershoot` recurred 3+ times
   - NVS writes failing
-  - MQTT was never connected at all during the session
-  - **MQTT uptime < 50%**
+  - **MQTT uptime < 50%**, OR a sustained reconnect cascade (`mqtt_reconnect_failures`
+    in the hundreds+) with near-zero confirmed publishes — a real outage. Do NOT fail on
+    `mqtt_connects: 0` alone; a carried-over session that published is fine.
 
 - **WARN** if ANY of:
   - Encoder fell back to StepperOnly mode
@@ -110,12 +118,14 @@ Assign one overall verdict (worst matching tier wins):
   - Any single subsystem degraded but handled
 
 - **PASS** if:
-  - Exactly one boot, zero crashes, no `ESP_ERR_TIMEOUT`
+  - Zero crashes, no `ESP_ERR_TIMEOUT`. Exactly one boot on a fresh start, OR **zero
+    boots on a healthy carried-over run** (`session_continuous: true`) — a continuous
+    session with no reboot is ideal, not a defect.
   - Motion completion rate ≥ 90% (ideally 100%), no stall/overshoot aborts
-  - Encoder healthy all day (EncoderGuarded mode maintained)
-  - MQTT uptime ≥ 95%
+  - Encoder healthy all day (`encoder_mode: EncoderGuarded`, inferred or explicit)
+  - MQTT uptime ≥ 95% (confirmed publishes present; connect events not required)
   - NVS writes succeeding
-  - Homing behaved as expected
+  - Homing behaved as expected (a sunrise forced-zero / already-home path counts)
 
 ## Day-over-day trend (if PREVIOUS SUMMARY is provided)
 

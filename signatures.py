@@ -110,9 +110,14 @@ _SIGS = [
     (r"Failed to open (a )?new connection", "MQTT_CONN_FAIL", ROLLUP),
     (r"Poll read error|poll_read select error", "MQTT_CONN_FAIL", ROLLUP),
     (r"MQTT client not connected", "MQTT_CONN_FAIL", ROLLUP),
+    # HTTP/OTA connect failures — the same storm hitting the OTA path, surfaced by
+    # the --audit sweep on 2026-07-04 (were collapsing as generic "noise").
+    (r"HTTP_CLIENT: Connection failed|Connection failed, sock", "NET_FAIL", ROLLUP),
+    (r"Failed to build GET request|ESP_ERR_HTTP_CONNECT", "OTA_FAIL", ROLLUP),
     (r"Wi-Fi reconnect:", "WIFI_RECONNECT", ROLLUP),
     (r"Failed to reconnect to Wi-Fi", "WIFI_RECONNECT", ROLLUP),
     (r"Wifi disconnected, attempting", "WIFI_RECONNECT", ROLLUP),
+    (r"Current wifi state: Disconnected", "WIFI_RECONNECT", ROLLUP),
     (r"^wifi:(state:|.*beacon|.*bcn|.*scan|ap_loss)", "WIFI_STATE", ROLLUP),
     # routine sun-tracking telemetry (the good-day token hog)
     (r"NOAA inputs|NOAA time cross-check|Tracking in progress|Angle Offset|Sun Angle|Actual Location",
@@ -120,6 +125,9 @@ _SIGS = [
     (r"Actual Heading:|Current datetime:|Tracking loop duration|Tracking move|tracking_done",
      "TRACKING_CYCLE", ROLLUP),
     (r"published successfully", "MQTT_PUBLISH", ROLLUP),
+    (r"Attempting to publish", "MQTT_PUBLISH", ROLLUP),
+    (r"Published telemetry to", "MQTT_PUBLISH", ROLLUP),
+    (r"MQTT Publish Message \d+ confirmed", "MQTT_PUBLISH", ROLLUP),
     (r"Stored .* in NVS", "NVS_STORE", ROLLUP),
     (r"forced encoder zero", "HOMING_CAL", ROLLUP),
     (r"Waiting for NTP sync", "NTP_WAIT", ROLLUP),
