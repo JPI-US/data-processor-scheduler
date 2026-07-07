@@ -6,6 +6,7 @@ dist-ssr
 .vinxi
 .tanstack/
 .nitro
+.claude
 
 # ---- Secrets (NEVER commit) ----
 .env
