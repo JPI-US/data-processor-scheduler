@@ -15,9 +15,10 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-// Pared back on purpose: the nightly report overview (Masthead, verdict strip,
-// metric cards, report list) is still in src/components/report + /report/$id and
-// can be dropped back in here whenever it's wanted again.
+// Pared back to the dispenser on purpose. The nightly-report overview UI that
+// used to live here (masthead, verdict strip, metric cards, report list, upload)
+// was removed in the same pass — recover it from git history if it's wanted
+// again. The single-report view at /report/$id is untouched.
 function Index() {
   return (
     <div className="mx-auto max-w-5xl px-6 py-12">
