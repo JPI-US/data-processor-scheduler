@@ -192,6 +192,29 @@ async function ensureDriveFolder(tower) {
   return tower;
 }
 
+/** Call the Apps Script Drive hook with a JSON action payload, adding the shared
+ *  secret here so no caller has to know it. Returns the parsed response, or
+ *  throws with a message worth showing. */
+async function driveHook(payload, timeoutMs = 20000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(DRIVE_HOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, secret: DRIVE_HOOK_SECRET }),
+      signal: ctrl.signal,
+      redirect: "follow", // /exec bounces to googleusercontent.com
+    });
+    const data = await res.json().catch(() => null);
+    if (!data) throw new Error("hook returned no JSON — check DRIVE_HOOK_URL is the /exec URL");
+    if (data.error) throw new Error(String(data.error));
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Firmware git tags, cached ~10 min so we don't hammer the GitHub API. The token
 // never leaves the server; the browser only sees the resulting tag names.
 let _tagCache = { at: 0, tags: [] };
@@ -306,6 +329,77 @@ const server = http.createServer(async (req, res) => {
     if (path === "/fleet/config" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify({ drive_enabled: DRIVE_ENABLED }));
+      return;
+    }
+
+    // 0c-files. Tower file dispenser. /fleet/files lists what's in a tower's
+    //   Drive folder; /fleet/file streams one of those files out as a download.
+    //   Both proxy the Apps Script hook, so the secret stays server-side and the
+    //   browser never handles base64 — it just follows a link.
+    if (path === "/fleet/files" || path === "/fleet/file") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "Content-Type": "text/plain" });
+        res.end("method not allowed");
+        return;
+      }
+      if (!DRIVE_ENABLED) {
+        res.writeHead(503, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(
+          JSON.stringify({ error: "Drive hook not configured (set DRIVE_HOOK_URL + SECRET)" }),
+        );
+        return;
+      }
+      const q = new URL(req.url, "http://localhost").searchParams;
+      const id = (q.get("id") || "").trim().slice(0, 60);
+      if (!id) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "missing tower id" }));
+        return;
+      }
+
+      if (path === "/fleet/files") {
+        try {
+          const data = await driveHook({ action: "files", id });
+          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+          res.end(JSON.stringify({ id, files: Array.isArray(data.files) ? data.files : [] }));
+        } catch (e) {
+          console.error("[fleet] files lookup failed:", e.message);
+          res.writeHead(502, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+      }
+
+      // Single file: fetch base64 from the hook, hand the browser real bytes with
+      // a real filename so large binaries never touch a client-side blob.
+      const name = (q.get("name") || "").trim().slice(0, 200);
+      if (!name) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "missing file name" }));
+        return;
+      }
+      try {
+        const data = await driveHook({ action: "file", id, name }, 45000);
+        const buf = Buffer.from(String(data.b64 || ""), "base64");
+        if (!buf.length) throw new Error("file came back empty");
+        if (data.size && Number(data.size) !== buf.length) {
+          throw new Error(`size mismatch: expected ${data.size} bytes, decoded ${buf.length}`);
+        }
+        // Quote-safe filename for the header; keep it recognisable otherwise.
+        const safe = (data.name || name).replace(/[^A-Za-z0-9._-]/g, "_");
+        res.writeHead(200, {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": buf.length,
+          "Content-Disposition": `attachment; filename="${safe}"`,
+          "Cache-Control": "no-store",
+          ...(data.sha256 ? { "X-File-Sha256": String(data.sha256) } : {}),
+        });
+        res.end(buf);
+      } catch (e) {
+        console.error("[fleet] file fetch failed:", e.message);
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
       return;
     }
 

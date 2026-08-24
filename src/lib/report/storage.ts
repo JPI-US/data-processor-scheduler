@@ -212,6 +212,34 @@ export async function createTowerFolder(id: string): Promise<Tower | null> {
   }
 }
 
+/** One file sitting in a tower's Drive folder. `kind` is how the Apps Script
+ *  classified it: the firmware image, the .env, or anything else that's there. */
+export interface TowerFile {
+  name: string;
+  kind: "binary" | "env" | "other";
+  size: number;
+  updated?: string;
+}
+
+/** List a tower's Drive folder. Returns an error string rather than throwing so
+ *  the panel can show why nothing came back (unknown id, hook down, unset). */
+export async function fetchTowerFiles(id: string): Promise<{ files: TowerFile[]; error: string }> {
+  try {
+    const res = await fetch(`/fleet/files?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+    const data = (await res.json().catch(() => ({}))) as { files?: TowerFile[]; error?: string };
+    if (!res.ok) return { files: [], error: data.error || `lookup failed (${res.status})` };
+    return { files: Array.isArray(data.files) ? data.files : [], error: "" };
+  } catch (e) {
+    return { files: [], error: e instanceof Error ? e.message : "lookup failed" };
+  }
+}
+
+/** The download URL for one file — a plain link the browser handles itself, so
+ *  the bytes never pass through JS. */
+export function towerFileUrl(id: string, name: string): string {
+  return `/fleet/file?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`;
+}
+
 /** Whether the server has the Drive hook configured (so the UI only offers
  *  "Create Drive folder" when it will actually work). */
 export async function fetchFleetConfig(): Promise<{ drive_enabled: boolean }> {
